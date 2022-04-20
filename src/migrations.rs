@@ -285,7 +285,7 @@ impl<T: Config> OnRuntimeUpgrade for SplitCandidateStateToDecreasePoV<T> {
 					total_less = total_less.saturating_add(*amount);
 					// update delegator state
 					// unreserve kicked bottom
-					T::Currency::unreserve(&owner, *amount);
+					T::Currency::unreserve(owner, *amount);
 					let mut delegator_state = <DelegatorState<T>>::get(&owner)
 						.expect("Delegation existence => DelegatorState existence");
 					let leaving = delegator_state.delegations.0.len() == 1usize;
@@ -432,7 +432,7 @@ impl<T: Config> OnRuntimeUpgrade for IncreaseMaxDelegationsPerCandidate<T> {
 				Vec::new()
 			};
 			let (mut total_counted, mut total_backing): (BalanceOf<T>, BalanceOf<T>) =
-				(state.bond.into(), state.bond.into());
+				(state.bond, state.bond);
 			for Bond { amount, .. } in &top_delegations {
 				total_counted = total_counted.saturating_add(*amount);
 				total_backing = total_backing.saturating_add(*amount);
@@ -655,7 +655,7 @@ impl<T: Config> OnRuntimeUpgrade for PurgeStaleStorage<T> {
 		if current_round <= payment_delay {
 			// early enough so no storage bloat exists yet
 			// (only relevant for chains <= payment_delay rounds old)
-			return db_weight.reads(reads);
+			return db_weight.reads(reads)
 		}
 		// already paid out at the beginning of current round
 		let most_recent_round_to_kill = current_round - payment_delay;
