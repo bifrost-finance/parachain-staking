@@ -53,6 +53,7 @@ use sp_std::marker::PhantomData;
 pub trait WeightInfo {
 	fn hotfix_remove_delegation_requests(x: u32) -> Weight;
 	fn hotfix_update_candidate_pool_value(x: u32) -> Weight;
+	fn hotfix_update_delegator_state() -> Weight;
 	fn set_staking_expectations() -> Weight;
 	fn set_inflation() -> Weight;
 	fn set_parachain_bond_account() -> Weight;
@@ -100,6 +101,11 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add((26_825_000 as Weight).saturating_mul(x as Weight))
 			.saturating_add(T::DbWeight::get().reads((1 as Weight).saturating_mul(x as Weight)))
 			.saturating_add(T::DbWeight::get().writes(1 as Weight))
+	}
+	fn hotfix_update_delegator_state() -> Weight {
+		(20_719_000 as Weight) // Standard Error: 3_000
+			.saturating_add(T::DbWeight::get().reads(5 as Weight))
+			.saturating_add(T::DbWeight::get().writes(4 as Weight))
 	}
 	fn set_staking_expectations() -> Weight {
 		(89_095_000 as Weight)
@@ -288,6 +294,11 @@ impl WeightInfo for () {
 			.saturating_add((26_825_000 as Weight).saturating_mul(x as Weight))
 			.saturating_add(RocksDbWeight::get().reads((1 as Weight).saturating_mul(x as Weight)))
 			.saturating_add(RocksDbWeight::get().writes(1 as Weight))
+	}
+	fn hotfix_update_delegator_state() -> Weight {
+		(20_719_000 as Weight) // Standard Error: 3_000
+			.saturating_add(RocksDbWeight::get().reads(5 as Weight))
+			.saturating_add(RocksDbWeight::get().writes(4 as Weight))
 	}
 	fn set_staking_expectations() -> Weight {
 		(20_719_000 as Weight)
