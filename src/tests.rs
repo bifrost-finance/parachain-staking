@@ -2095,6 +2095,22 @@ fn can_delegator_bond_more_for_leaving_candidate() {
 		});
 }
 
+#[test]
+fn delegator_bond_more_should_fail_when_revoking() {
+	ExtBuilder::default()
+		.with_balances(vec![(1, 30), (2, 25), (3, 20)])
+		.with_candidates(vec![(1, 30), (3, 20)])
+		.with_delegations(vec![(2, 1, 10), (2, 3, 10)])
+		.build()
+		.execute_with(|| {
+			assert_ok!(ParachainStaking::schedule_revoke_delegation(Origin::signed(2), 1));
+			assert_noop!(
+				ParachainStaking::schedule_delegator_bond_less(Origin::signed(2), 1, 1),
+				Error::<Test>::PendingDelegationRequestAlreadyExists
+			);
+		});
+}
+
 // DELEGATOR BOND LESS
 
 #[test]
@@ -2152,7 +2168,7 @@ fn can_delegator_bond_less_if_leaving() {
 }
 
 #[test]
-fn cannot_delegator_bond_less_if_revoking() {
+fn cannot_delegator_bond_more_if_revoking() {
 	ExtBuilder::default()
 		.with_balances(vec![(1, 30), (2, 25), (3, 20)])
 		.with_candidates(vec![(1, 30), (3, 20)])
@@ -2161,7 +2177,7 @@ fn cannot_delegator_bond_less_if_revoking() {
 		.execute_with(|| {
 			assert_ok!(ParachainStaking::schedule_revoke_delegation(Origin::signed(2), 1));
 			assert_noop!(
-				ParachainStaking::schedule_delegator_bond_less(Origin::signed(2), 1, 1),
+				ParachainStaking::delegator_bond_more(Origin::signed(2), 1, 1),
 				Error::<Test>::PendingDelegationRequestAlreadyExists
 			);
 		});

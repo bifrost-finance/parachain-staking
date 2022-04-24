@@ -2448,21 +2448,33 @@ pub mod pallet {
 			amount: BalanceOf<T>,
 		) -> DispatchResultWithPostInfo {
 			frame_system::ensure_root(origin)?;
-			T::Currency::unreserve(&delegator, amount);
-			let mut state = <CandidateInfo<T>>::get(&candidate).ok_or(Error::<T>::CandidateDNE)?;
-			let new_total_staked = <Total<T>>::get().saturating_sub(amount);
-			<Total<T>>::put(new_total_staked);
-			// Arithmetic assumptions are self.bond > less && self.bond - less > CollatorMinBond
-			// (assumptions enforced by `schedule_bond_less`; if storage corrupts, must re-verify)
-			state.bond = state.bond.saturating_sub(amount);
-			state.total_counted = state.total_counted.saturating_sub(amount);
-			// reset s.t. no pending request
-			state.request = None;
-			// update candidate pool value because it must change if self bond changes
-			if state.is_active() {
-				Pallet::<T>::update_active(candidate.clone(), state.total_counted.into());
+
+			if amount >= T::MinDelegatorStk::get() {
+				// fill the missing delegator state back
+				ensure!(!Self::is_candidate(&delegator), Error::<T>::CandidateExists);
+				let delegator_state = Delegator::new(delegator.clone(), candidate, amount);
+				<DelegatorState<T>>::insert(&delegator, delegator_state);
+			} else {
+				// unreserve
+				T::Currency::unreserve(&delegator, amount);
+				let mut state =
+					<CandidateInfo<T>>::get(&candidate).ok_or(Error::<T>::CandidateDNE)?;
+				let new_total_staked = <Total<T>>::get().saturating_sub(amount);
+				<Total<T>>::put(new_total_staked);
+				// Arithmetic assumptions are self.bond > less && self.bond - less > CollatorMinBond
+				// (assumptions enforced by `schedule_bond_less`; if storage corrupts, must
+				// re-verify)
+				state.bond = state.bond.saturating_sub(amount);
+				state.total_counted = state.total_counted.saturating_sub(amount);
+				// reset s.t. no pending request
+				state.request = None;
+				// update candidate pool value because it must change if self bond changes
+				if state.is_active() {
+					Pallet::<T>::update_active(candidate.clone(), state.total_counted.into());
+				}
+				<CandidateInfo<T>>::insert(&candidate, state);
 			}
-			<CandidateInfo<T>>::insert(&candidate, state);
+
 			Ok(().into())
 		}
 		#[pallet::weight(<T as Config>::WeightInfo::set_staking_expectations())]
@@ -3050,7 +3062,7 @@ pub mod pallet {
 			let mut state = <DelegatorState<T>>::get(&delegator).ok_or(Error::<T>::DelegatorDNE)?;
 			if let Some(request) = state.requests.requests.get(&candidate) {
 				if matches!(request.action, DelegationChange::Revoke) {
-					return Err(Error::<T>::DelegatorDNE.into())
+					return Err(Error::<T>::PendingDelegationRequestAlreadyExists.into())
 				}
 			}
 			state.increase_delegation::<T>(candidate, more)?;

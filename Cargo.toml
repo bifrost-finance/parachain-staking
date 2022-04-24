@@ -3,7 +3,7 @@ name = "parachain-staking"
 authors = [ "PureStake" ]
 description = "parachain staking pallet for collator selection and reward distribution"
 edition = "2021"
-version = "3.0.0"
+version = "3.0.1"
 
 [dependencies]
 log = "0.4.16"

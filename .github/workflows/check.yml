@@ -9,8 +9,6 @@ on:
     branches:
       - master
       - main
-      - feat*
-      - fix*
     paths-ignore:
       - '**.md'
   pull_request:
