@@ -15,8 +15,6 @@
 // along with Moonbeam.  If not, see <http://www.gnu.org/licenses/>.
 
 //! Test utilities
-use crate as parachain_staking;
-use crate::{pallet, AwardedPts, Config, InflationInfo, Points, Range};
 use frame_support::{
 	construct_runtime, parameter_types,
 	traits::{Everything, GenesisBuild, OnFinalize, OnInitialize},
@@ -24,12 +22,15 @@ use frame_support::{
 	PalletId,
 };
 use sp_core::H256;
-use sp_io;
+// use sp_io;
 use sp_runtime::{
 	testing::Header,
 	traits::{BlakeTwo256, IdentityLookup},
 	Perbill, Percent,
 };
+
+use crate as parachain_staking;
+use crate::{pallet, AwardedPts, Config, InflationInfo, Points, Range};
 
 pub type AccountId = u64;
 pub type Balance = u128;
@@ -172,11 +173,7 @@ impl Default for ExtBuilder {
 			delegations: vec![],
 			collators: vec![],
 			inflation: InflationInfo {
-				expect: Range {
-					min: 700,
-					ideal: 700,
-					max: 700,
-				},
+				expect: Range { min: 700, ideal: 700, max: 700 },
 				// not used
 				annual: Range {
 					min: Perbill::from_percent(50),
@@ -224,11 +221,9 @@ impl ExtBuilder {
 			.build_storage::<Test>()
 			.expect("Frame system builds valid default genesis config");
 
-		pallet_balances::GenesisConfig::<Test> {
-			balances: self.balances,
-		}
-		.assimilate_storage(&mut t)
-		.expect("Pallet balances storage can be assimilated");
+		pallet_balances::GenesisConfig::<Test> { balances: self.balances }
+			.assimilate_storage(&mut t)
+			.expect("Pallet balances storage can be assimilated");
 		parachain_staking::GenesisConfig::<Test> {
 			candidates: self.collators,
 			delegations: self.delegations,
@@ -289,13 +284,7 @@ pub(crate) fn events() -> Vec<pallet::Event<Test>> {
 	System::events()
 		.into_iter()
 		.map(|r| r.event)
-		.filter_map(|e| {
-			if let Event::ParachainStaking(inner) = e {
-				Some(inner)
-			} else {
-				None
-			}
-		})
+		.filter_map(|e| if let Event::ParachainStaking(inner) = e { Some(inner) } else { None })
 		.collect::<Vec<_>>()
 }
 
@@ -304,7 +293,7 @@ pub(crate) fn events() -> Vec<pallet::Event<Test>> {
 macro_rules! assert_last_event {
 	($event:expr) => {
 		match &$event {
-			e => assert_eq!(*e, crate::mock::last_event()),
+			e => assert_eq!(*e, $crate::mock::last_event()),
 		}
 	};
 }
@@ -315,7 +304,7 @@ macro_rules! assert_last_event {
 macro_rules! assert_eq_events {
 	($events:expr) => {
 		match &$events {
-			e => similar_asserts::assert_eq!(*e, crate::mock::events()),
+			e => similar_asserts::assert_eq!(*e, $crate::mock::events()),
 		}
 	};
 }
@@ -339,7 +328,7 @@ macro_rules! assert_eq_events {
 #[macro_export]
 macro_rules! assert_eq_last_events {
 	($events:expr) => {
-		assert_tail_eq!($events, crate::mock::events());
+		assert_tail_eq!($events, $crate::mock::events());
 	};
 }
 
@@ -368,12 +357,12 @@ macro_rules! assert_event_emitted {
 		match &$event {
 			e => {
 				assert!(
-					crate::mock::events().iter().find(|x| *x == e).is_some(),
+					$crate::mock::events().iter().find(|x| *x == e).is_some(),
 					"Event {:?} was not found in events: \n {:?}",
 					e,
-					crate::mock::events()
+					$crate::mock::events()
 				);
-			}
+			},
 		}
 	};
 }
@@ -385,12 +374,12 @@ macro_rules! assert_event_not_emitted {
 		match &$event {
 			e => {
 				assert!(
-					crate::mock::events().iter().find(|x| *x == e).is_none(),
+					$crate::mock::events().iter().find(|x| *x == e).is_none(),
 					"Event {:?} was found in events: \n {:?}",
 					e,
-					crate::mock::events()
+					$crate::mock::events()
 				);
-			}
+			},
 		}
 	};
 }
@@ -458,13 +447,7 @@ fn geneses() {
 			(10, 100),
 		])
 		.with_candidates(vec![(1, 20), (2, 20), (3, 20), (4, 20), (5, 10)])
-		.with_delegations(vec![
-			(6, 1, 10),
-			(7, 1, 10),
-			(8, 2, 10),
-			(9, 2, 10),
-			(10, 1, 10),
-		])
+		.with_delegations(vec![(6, 1, 10), (7, 1, 10), (8, 2, 10), (9, 2, 10), (10, 1, 10)])
 		.build()
 		.execute_with(|| {
 			assert!(System::events().is_empty());

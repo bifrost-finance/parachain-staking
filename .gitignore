@@ -2,3 +2,6 @@
 /.idea
 Cargo.lock
 .vscode
+.cargo/
+fleet.toml
+installer.bin
