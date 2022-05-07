@@ -574,7 +574,7 @@ pub mod pallet {
 			let mut less_total_staked = None;
 			let delegator_added = match self.top_capacity {
 				CapacityStatus::Full => {
-					// top is full, insert into top iff the lowest_top < amount
+					// top is full, insert into top if the lowest_top < amount
 					if self.lowest_top_delegation_amount < delegation.amount.into() {
 						// bumps lowest top to the bottom inside this function call
 						less_total_staked = self.add_top_delegation::<T>(candidate, delegation);
@@ -1210,7 +1210,7 @@ pub mod pallet {
 		pub delegations: OrderedSet<Bond<AccountId, Balance>>,
 		/// Total balance locked for this delegator
 		pub total: Balance,
-		/// Requests to change delegations, relevant iff active
+		/// Requests to change delegations, relevant if active
 		pub requests: PendingDelegationRequests<AccountId, Balance>,
 		/// Status for this delegator
 		pub status: DelegatorStatus,
@@ -2194,6 +2194,17 @@ pub mod pallet {
 		StorageMap<_, Twox64Concat, T::AccountId, CandidateMetadata<BalanceOf<T>>, OptionQuery>;
 
 	#[pallet::storage]
+	#[pallet::getter(fn collator_schedule_delegators)]
+	/// Get collator schedule delegators to calculated accurate staking reward
+	pub(crate) type CollatorScheduleDelegators<T: Config> = StorageMap<
+		_,
+		Twox64Concat,
+		T::AccountId,
+		BTreeMap<T::AccountId, DelegationRequest<T::AccountId, BalanceOf<T>>>,
+		OptionQuery,
+	>;
+
+	#[pallet::storage]
 	#[pallet::getter(fn top_delegations)]
 	/// Top delegations for collator candidate
 	pub(crate) type TopDelegations<T: Config> = StorageMap<
@@ -3042,7 +3053,12 @@ pub mod pallet {
 			let delegator = ensure_signed(origin)?;
 			let mut state = <DelegatorState<T>>::get(&delegator).ok_or(Error::<T>::DelegatorDNE)?;
 			let (now, when) = state.schedule_revoke::<T>(collator.clone())?;
-			<DelegatorState<T>>::insert(&delegator, state);
+			<DelegatorState<T>>::insert(&delegator, state.clone());
+			let mut delegators_state =
+				<CollatorScheduleDelegators<T>>::get(&collator).unwrap_or_default();
+			if let Some(val) = state.requests.requests.get(&collator) {
+				delegators_state.insert(delegator.clone(), val.clone());
+			}
 			Self::deposit_event(Event::DelegationRevocationScheduled {
 				round: now,
 				delegator,
@@ -3078,7 +3094,12 @@ pub mod pallet {
 			let caller = ensure_signed(origin)?;
 			let mut state = <DelegatorState<T>>::get(&caller).ok_or(Error::<T>::DelegatorDNE)?;
 			let when = state.schedule_decrease_delegation::<T>(candidate.clone(), less)?;
-			<DelegatorState<T>>::insert(&caller, state);
+			<DelegatorState<T>>::insert(&caller, state.clone());
+			let mut delegators_state =
+				<CollatorScheduleDelegators<T>>::get(&candidate).unwrap_or_default();
+			if let Some(val) = state.requests.requests.get(&candidate) {
+				delegators_state.insert(caller.clone(), val.clone());
+			}
 			Self::deposit_event(Event::DelegationDecreaseScheduled {
 				delegator: caller,
 				candidate,
@@ -3107,8 +3128,11 @@ pub mod pallet {
 		) -> DispatchResultWithPostInfo {
 			let delegator = ensure_signed(origin)?;
 			let mut state = <DelegatorState<T>>::get(&delegator).ok_or(Error::<T>::DelegatorDNE)?;
-			let request = state.cancel_pending_request::<T>(candidate)?;
+			let request = state.cancel_pending_request::<T>(candidate.clone())?;
 			<DelegatorState<T>>::insert(&delegator, state);
+			let mut delegators_state =
+				<CollatorScheduleDelegators<T>>::get(&candidate).unwrap_or_default();
+			delegators_state.remove(&candidate);
 			Self::deposit_event(Event::CancelledDelegationRequest {
 				delegator,
 				cancelled_request: request,
@@ -3193,7 +3217,7 @@ pub mod pallet {
 				if let Ok(imb) =
 					T::Currency::deposit_into_existing(&bond_config.account, parachain_bond_reserve)
 				{
-					// update round issuance iff transfer succeeds
+					// update round issuance if transfer succeeds
 					left_issuance = left_issuance.saturating_sub(imb.peek());
 					Self::deposit_event(Event::ReservedForParachainBond {
 						account: bond_config.account,
@@ -3303,17 +3327,63 @@ pub mod pallet {
 					mint(amt_due, collator.clone());
 				} else {
 					// pay collator first; commission + due_portion
+					// check collator schedule_leave and schedule_bond_less
+					let mut collator_leave = 0u32;
+					let mut collator_bond_less_amount = BalanceOf::<T>::zero();
+					let mut collator_bond_less_when = 0u32;
+					if let Some(candidate_meta) = <CandidateInfo<T>>::get(&collator) {
+						collator_leave = match candidate_meta.status {
+							CollatorStatus::Leaving(when) => when,
+							_ => 0u32,
+						};
+						if collator_leave != 0 {
+							if !candidate_meta.request.is_none() {
+								if let Some(CandidateBondLessRequest { amount, when_executable }) =
+									candidate_meta.request
+								{
+									collator_bond_less_amount = amount;
+									collator_bond_less_when = when_executable;
+								}
+							}
+						}
+					}
+					if collator_leave != 0 && collator_leave <= paid_for_round {
+						return (None, 0u64)
+					}
+					if collator_bond_less_when != 0 && collator_bond_less_when <= paid_for_round {
+						state.bond.saturating_sub(collator_bond_less_amount);
+						state.total.saturating_sub(collator_bond_less_amount);
+					}
+
+					let delegators_state =
+						<CollatorScheduleDelegators<T>>::get(&collator).unwrap_or_default();
+
+					// pay delegators due portion
+					for Bond { owner, amount } in state.delegations {
+						if let Some(delegator_state) = delegators_state.get(&owner) {
+							if delegator_state.when_executable <= paid_for_round {
+								match delegator_state.action {
+									DelegationChange::Revoke => {
+										state.total.saturating_sub(amount);
+										continue
+									},
+									DelegationChange::Decrease => {
+										amount.saturating_sub(delegator_state.amount);
+										state.total.saturating_sub(delegator_state.amount);
+									},
+								}
+							}
+						}
+						let percent = Perbill::from_rational(amount, state.total);
+						let due = percent * amt_due;
+						mint(due, owner.clone());
+					}
+
 					let collator_pct = Perbill::from_rational(state.bond, state.total);
 					let commission = pct_due * collator_issuance;
 					amt_due = amt_due.saturating_sub(commission);
 					let collator_reward = (collator_pct * amt_due).saturating_add(commission);
 					mint(collator_reward, collator.clone());
-					// pay delegators due portion
-					for Bond { owner, amount } in state.delegations {
-						let percent = Perbill::from_rational(amount, state.total);
-						let due = percent * amt_due;
-						mint(due, owner.clone());
-					}
 				}
 
 				(
