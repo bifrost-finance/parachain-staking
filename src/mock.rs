@@ -391,7 +391,7 @@ pub(crate) fn set_author(round: u32, acc: u64, pts: u32) {
 }
 
 #[test]
-fn geneses() {
+fn genesis() {
 	ExtBuilder::default()
 		.with_balances(vec![
 			(1, 1000),
