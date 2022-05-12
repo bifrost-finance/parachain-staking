@@ -2450,8 +2450,13 @@ pub mod pallet {
 			frame_system::ensure_root(origin)?;
 
 			if amount >= T::MinDelegatorStk::get() {
-				// fill the missing delegator state back
+				// fix CandidateInfo state
 				ensure!(!Self::is_candidate(&delegator), Error::<T>::CandidateExists);
+				let mut state =
+					<CandidateInfo<T>>::get(&candidate).ok_or(Error::<T>::CandidateDNE)?;
+				state.add_delegation::<T>(&candidate, Bond { owner: delegator.clone(), amount })?;
+				<CandidateInfo<T>>::insert(&candidate, state);
+				// fix DelegatorState
 				let delegator_state = Delegator::new(delegator.clone(), candidate, amount);
 				<DelegatorState<T>>::insert(&delegator, delegator_state);
 			} else {
