@@ -1874,6 +1874,7 @@ pub mod pallet {
 		/// PalletId
 		#[pallet::constant]
 		type PalletId: Get<PalletId>;
+		type EnsureConfirmAsGovernance: EnsureOrigin<<Self as frame_system::Config>::Origin>;
 	}
 
 	#[pallet::error]
@@ -2447,7 +2448,7 @@ pub mod pallet {
 			delegator: T::AccountId,
 			amount: BalanceOf<T>,
 		) -> DispatchResultWithPostInfo {
-			frame_system::ensure_root(origin)?;
+			T::EnsureConfirmAsGovernance::ensure_origin(origin)?;
 
 			if amount >= T::MinDelegatorStk::get() {
 				// fix CandidateInfo state
@@ -2457,7 +2458,19 @@ pub mod pallet {
 				state.add_delegation::<T>(&candidate, Bond { owner: delegator.clone(), amount })?;
 				<CandidateInfo<T>>::insert(&candidate, state);
 				// fix DelegatorState
-				let delegator_state = Delegator::new(delegator.clone(), candidate, amount);
+				let delegator_state = if let Some(mut state) = <DelegatorState<T>>::get(&delegator)
+				{
+					// delegation after first
+					ensure!(
+						state.add_delegation(Bond { owner: candidate.clone(), amount }),
+						Error::<T>::AlreadyDelegatedCandidate
+					);
+					state
+				} else {
+					// first delegation
+					ensure!(!Self::is_candidate(&delegator), Error::<T>::CandidateExists);
+					Delegator::new(delegator.clone(), candidate.clone(), amount)
+				};
 				<DelegatorState<T>>::insert(&delegator, delegator_state);
 			} else {
 				// unreserve

@@ -17,10 +17,11 @@
 //! Test utilities
 use frame_support::{
 	construct_runtime, parameter_types,
-	traits::{Everything, GenesisBuild, OnFinalize, OnInitialize},
+	traits::{EnsureOrigin, Everything, GenesisBuild, OnFinalize, OnInitialize},
 	weights::Weight,
 	PalletId,
 };
+use frame_system::RawOrigin;
 use sp_core::H256;
 // use sp_io;
 use sp_runtime::{
@@ -153,6 +154,25 @@ impl Config for Test {
 	type PalletId = ParachainStakingPalletId;
 	type ToMigrateInvulnables = ToMigrateInvulnables;
 	type InitSeedStk = InitSeedStk;
+	type EnsureConfirmAsGovernance = EnsureConfirmAsGovernance;
+}
+
+pub struct EnsureConfirmAsGovernance;
+impl EnsureOrigin<Origin> for EnsureConfirmAsGovernance {
+	type Success = AccountId;
+
+	fn try_origin(o: Origin) -> Result<Self::Success, Origin> {
+		Into::<Result<RawOrigin<AccountId>, Origin>>::into(o).and_then(|o| match o {
+			RawOrigin::Signed(who) => Ok(who),
+			RawOrigin::Root => Ok(1),
+			r => Err(Origin::from(r)),
+		})
+	}
+
+	#[cfg(feature = "runtime-benchmarks")]
+	fn successful_origin() -> Origin {
+		Origin::from(RawOrigin::Signed(1))
+	}
 }
 
 pub(crate) struct ExtBuilder {
