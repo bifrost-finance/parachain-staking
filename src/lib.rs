@@ -347,7 +347,7 @@ pub mod pallet {
 		}
 	}
 
-	#[derive(PartialEq, Encode, Decode, RuntimeDebug, TypeInfo)]
+	#[derive(PartialEq, Eq, Encode, Decode, RuntimeDebug, TypeInfo)]
 	/// Capacity status for top or bottom delegations
 	pub enum CapacityStatus {
 		/// Reached capacity
@@ -1193,7 +1193,7 @@ pub mod pallet {
 		}
 	}
 
-	#[derive(Clone, PartialEq, Encode, Decode, RuntimeDebug, TypeInfo)]
+	#[derive(Clone, PartialEq, Eq, Encode, Decode, RuntimeDebug, TypeInfo)]
 	pub enum DelegatorStatus {
 		/// Active with no scheduled exit
 		Active,
@@ -1874,6 +1874,7 @@ pub mod pallet {
 		/// PalletId
 		#[pallet::constant]
 		type PalletId: Get<PalletId>;
+		type EnsureConfirmAsGovernance: EnsureOrigin<<Self as frame_system::Config>::Origin>;
 	}
 
 	#[pallet::error]
@@ -2445,43 +2446,46 @@ pub mod pallet {
 			origin: OriginFor<T>,
 			candidate: T::AccountId,
 			delegator: T::AccountId,
-			amount: BalanceOf<T>,
+			candidate_amount: BalanceOf<T>,
+			unreserve_amount: BalanceOf<T>,
+			delegation_count: u32,
 		) -> DispatchResultWithPostInfo {
-			frame_system::ensure_root(origin)?;
+			T::EnsureConfirmAsGovernance::ensure_origin(origin)?;
 
-			if amount >= T::MinDelegatorStk::get() {
-				// fix CandidateInfo state
-				ensure!(!Self::is_candidate(&delegator), Error::<T>::CandidateExists);
-				let mut state =
-					<CandidateInfo<T>>::get(&candidate).ok_or(Error::<T>::CandidateDNE)?;
-				state.add_delegation::<T>(&candidate, Bond { owner: delegator.clone(), amount })?;
-				<CandidateInfo<T>>::insert(&candidate, state);
-				// fix DelegatorState
-				let delegator_state = Delegator::new(delegator.clone(), candidate, amount);
-				<DelegatorState<T>>::insert(&delegator, delegator_state);
-			} else {
-				// unreserve
-				T::Currency::unreserve(&delegator, amount);
-				let mut state =
-					<CandidateInfo<T>>::get(&candidate).ok_or(Error::<T>::CandidateDNE)?;
-				let new_total_staked = <Total<T>>::get().saturating_sub(amount);
-				<Total<T>>::put(new_total_staked);
-				// Arithmetic assumptions are self.bond > less && self.bond - less > CollatorMinBond
-				// (assumptions enforced by `schedule_bond_less`; if storage corrupts, must
-				// re-verify)
-				state.bond = state.bond.saturating_sub(amount);
-				state.total_counted = state.total_counted.saturating_sub(amount);
-				// reset s.t. no pending request
-				state.request = None;
-				// update candidate pool value because it must change if self bond changes
-				if state.is_active() {
-					Pallet::<T>::update_active(candidate.clone(), state.total_counted.into());
-				}
-				<CandidateInfo<T>>::insert(&candidate, state);
+			let mut state = <CandidateInfo<T>>::get(&candidate).ok_or(Error::<T>::CandidateDNE)?;
+			// update Total
+			let new_total_staked = <Total<T>>::get().saturating_sub(candidate_amount);
+			<Total<T>>::put(new_total_staked);
+
+			// update top_delegations
+			let mut top_delegations = <TopDelegations<T>>::get(&candidate).ok_or(Error::<T>::DelegationDNE)?;
+			top_delegations.delegations = top_delegations
+				.delegations
+				.clone()
+				.into_iter()
+				.filter(|d| d.owner != delegator)
+				.collect();
+			top_delegations.total = top_delegations.total.saturating_sub(candidate_amount);
+
+			// update candidate info
+			state.reset_top_data::<T>(candidate.clone(), &top_delegations);
+			state.delegation_count = delegation_count;
+			<TopDelegations<T>>::insert(candidate.clone(), top_delegations);
+
+			state.bond = state.bond.saturating_sub(candidate_amount);
+			state.total_counted = state.total_counted.saturating_sub(candidate_amount);
+			state.request = None;
+			if state.is_active() {
+				Pallet::<T>::update_active(candidate.clone(), state.total_counted.into());
 			}
+			<CandidateInfo<T>>::insert(&candidate, state);
 
+			<DelegatorState<T>>::remove(&delegator);
+			// unreserve
+			T::Currency::unreserve(&delegator, unreserve_amount);
 			Ok(().into())
 		}
+
 		#[pallet::weight(<T as Config>::WeightInfo::set_staking_expectations())]
 		/// Set the expectations for total staked. These expectations determine the issuance for
 		/// the round according to logic in `fn compute_issuance`
