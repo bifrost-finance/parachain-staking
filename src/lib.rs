@@ -2473,7 +2473,7 @@ pub mod pallet {
 			state.delegation_count = delegation_count;
 			<TopDelegations<T>>::insert(candidate.clone(), top_delegations);
 
-			state.total_counted = state.total_counted.saturating_sub(candidate_amount);
+			// state.total_counted = state.total_counted.saturating_sub(candidate_amount);
 			state.request = None;
 			if state.is_active() {
 				Pallet::<T>::update_active(candidate.clone(), state.total_counted.into());
