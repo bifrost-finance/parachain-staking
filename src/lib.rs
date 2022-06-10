@@ -2458,7 +2458,8 @@ pub mod pallet {
 			<Total<T>>::put(new_total_staked);
 
 			// update top_delegations
-			let mut top_delegations = <TopDelegations<T>>::get(&candidate).ok_or(Error::<T>::DelegationDNE)?;
+			let mut top_delegations =
+				<TopDelegations<T>>::get(&candidate).ok_or(Error::<T>::DelegationDNE)?;
 			top_delegations.delegations = top_delegations
 				.delegations
 				.clone()
