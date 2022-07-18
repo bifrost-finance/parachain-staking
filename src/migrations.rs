@@ -15,6 +15,9 @@
 // along with Moonbeam.  If not, see <http://www.gnu.org/licenses/>.
 
 //! # Migrations
+
+#![allow(unused)]
+
 #[cfg(feature = "try-runtime")]
 use frame_support::traits::OnRuntimeUpgradeHelpersExt;
 use frame_support::Twox64Concat;
@@ -34,6 +37,7 @@ extern crate alloc;
 #[cfg(feature = "try-runtime")]
 use alloc::format;
 
+#[allow(deprecated)]
 use frame_support::{
 	migration::{remove_storage_prefix, storage_key_iter},
 	pallet_prelude::PhantomData,
@@ -94,7 +98,7 @@ impl<T: Config> OnRuntimeUpgrade for InitGenesisMigration<T> {
 		// Set parachain bond config to default config
 		<ParachainBondInfo<T>>::put(ParachainBondConfig {
 			// must be set soon; if not => due inflation will be sent to collators/delegators
-			account: T::PalletId::get().into_account(),
+			account: T::PalletId::get().into_account_truncating(),
 			percent: T::DefaultParachainBondReservePercent::get(),
 			payment_in_round: T::PaymentInRound::get(),
 		});
@@ -241,167 +245,167 @@ impl<T: Config> OnRuntimeUpgrade for PatchIncorrectDelegationSums<T> {
 /// Migration to split CandidateState and minimize unnecessary storage reads
 /// for PoV optimization
 /// This assumes Config::MaxTopDelegationsPerCandidate == OldConfig::MaxDelegatorsPerCandidate
-pub struct SplitCandidateStateToDecreasePoV<T>(PhantomData<T>);
-impl<T: Config> OnRuntimeUpgrade for SplitCandidateStateToDecreasePoV<T> {
-	fn on_runtime_upgrade() -> Weight {
-		let pallet_prefix: &[u8] = b"ParachainStaking";
-		let storage_item_prefix: &[u8] = b"CandidateState";
-		// Read all the data into memory.
-		// https://crates.parity.io/frame_support/storage/migration/fn.storage_key_iter.html
-		let stored_data: Vec<_> = storage_key_iter::<
-			T::AccountId,
-			CollatorCandidate<T::AccountId, BalanceOf<T>>,
-			Twox64Concat,
-		>(pallet_prefix, storage_item_prefix)
-		.collect();
-		let migrated_count: Weight = stored_data
-			.len()
-			.try_into()
-			.expect("There are between 0 and 2**64 mappings stored.");
-		// Now remove the old storage
-		// https://crates.parity.io/frame_support/storage/migration/fn.remove_storage_prefix.html
-		remove_storage_prefix(pallet_prefix, storage_item_prefix, &[]);
-		// Assert that old storage is empty
-		assert!(storage_key_iter::<
-			T::AccountId,
-			CollatorCandidate<T::AccountId, BalanceOf<T>>,
-			Twox64Concat,
-		>(pallet_prefix, storage_item_prefix)
-		.next()
-		.is_none());
-		for (account, state) in stored_data {
-			// all delegations are stored greatest to least post migration
-			// but bottom delegations were least to greatest pre migration
-			let new_bottom_delegations: Vec<Bond<T::AccountId, BalanceOf<T>>> = if state
-				.bottom_delegations
-				.len() >
-				T::MaxBottomDelegationsPerCandidate::get() as usize
-			{
-				// if actual length > max bottom delegations, revoke the bottom actual - max
-				let rest = state.bottom_delegations.len() -
-					T::MaxBottomDelegationsPerCandidate::get() as usize;
-				let mut total_less = BalanceOf::<T>::zero();
-				state.bottom_delegations.iter().take(rest).for_each(|Bond { owner, amount }| {
-					total_less = total_less.saturating_add(*amount);
-					// update delegator state
-					// unreserve kicked bottom
-					T::Currency::unreserve(owner, *amount);
-					let mut delegator_state = <DelegatorState<T>>::get(&owner)
-						.expect("Delegation existence => DelegatorState existence");
-					let leaving = delegator_state.delegations.0.len() == 1usize;
-					delegator_state.rm_delegation(&account);
-					Pallet::<T>::deposit_event(Event::DelegationKicked {
-						delegator: owner.clone(),
-						candidate: account.clone(),
-						unstaked_amount: *amount,
-					});
-					if leaving {
-						<DelegatorState<T>>::remove(&owner);
-						Pallet::<T>::deposit_event(Event::DelegatorLeft {
-							delegator: owner.clone(),
-							unstaked_amount: *amount,
-						});
-					} else {
-						<DelegatorState<T>>::insert(&owner, delegator_state);
-					}
-				});
-				let new_total = <Total<T>>::get() - total_less;
-				<Total<T>>::put(new_total);
-				state
-					.bottom_delegations
-					.into_iter()
-					.rev()
-					.take(T::MaxBottomDelegationsPerCandidate::get() as usize)
-					.collect()
-			} else {
-				state.bottom_delegations.into_iter().rev().collect()
-			};
-			let lowest_top_delegation_amount = if state.top_delegations.is_empty() {
-				BalanceOf::<T>::zero()
-			} else {
-				state.top_delegations[state.top_delegations.len() - 1].amount
-			};
-			let highest_bottom_delegation_amount = if new_bottom_delegations.is_empty() {
-				BalanceOf::<T>::zero()
-			} else {
-				new_bottom_delegations[0].amount
-			};
-			// start here,
-			let lowest_bottom_delegation_amount = if new_bottom_delegations.is_empty() {
-				BalanceOf::<T>::zero()
-			} else {
-				new_bottom_delegations[new_bottom_delegations.len() - 1].amount
-			};
-			let top_capacity = match &state.top_delegations {
-				x if x.len() as u32 >= T::MaxTopDelegationsPerCandidate::get() =>
-					CapacityStatus::Full,
-				x if x.is_empty() => CapacityStatus::Empty,
-				_ => CapacityStatus::Partial,
-			};
-			let bottom_capacity = match &new_bottom_delegations {
-				x if x.len() as u32 >= T::MaxBottomDelegationsPerCandidate::get() =>
-					CapacityStatus::Full,
-				x if x.is_empty() => CapacityStatus::Empty,
-				_ => CapacityStatus::Partial,
-			};
-			let metadata = CandidateMetadata {
-				bond: state.bond,
-				delegation_count: state.top_delegations.len() as u32 +
-					new_bottom_delegations.len() as u32,
-				total_counted: state.total_counted,
-				lowest_top_delegation_amount,
-				highest_bottom_delegation_amount,
-				lowest_bottom_delegation_amount,
-				top_capacity,
-				bottom_capacity,
-				request: state.request,
-				status: state.state,
-			};
-			<CandidateInfo<T>>::insert(&account, metadata);
-			let top_delegations = Delegations {
-				total: state.total_counted - state.bond,
-				delegations: state.top_delegations,
-			};
-			<TopDelegations<T>>::insert(&account, top_delegations);
-			let bottom_delegations = Delegations {
-				total: new_bottom_delegations
-					.iter()
-					.fold(BalanceOf::<T>::zero(), |acc, b| acc + b.amount),
-				delegations: new_bottom_delegations,
-			};
-			<BottomDelegations<T>>::insert(&account, bottom_delegations);
-		}
-		let weight = T::DbWeight::get();
-		migrated_count.saturating_mul(3 * weight.write + weight.read)
-	}
-	#[cfg(feature = "try-runtime")]
-	fn pre_upgrade() -> Result<(), &'static str> {
-		// get delegation count for all candidates to check consistency
-		for (account, state) in <CandidateState<T>>::iter() {
-			// insert top + bottom into some temp map?
-			let total_delegation_count =
-				state.top_delegations.len() as u32 + state.bottom_delegations.len() as u32;
-			Self::set_temp_storage(
-				total_delegation_count,
-				&format!("Candidate{:?}DelegationCount", account)[..],
-			);
-		}
-		Ok(())
-	}
-
-	#[cfg(feature = "try-runtime")]
-	fn post_upgrade() -> Result<(), &'static str> {
-		// check that top + bottom are the same as the expected (stored in temp)
-		for (account, state) in <CandidateInfo<T>>::iter() {
-			let expected_count: u32 =
-				Self::get_temp_storage(&format!("Candidate{:?}DelegationCount", account)[..])
-					.expect("qed");
-			let actual_count = state.delegation_count;
-			assert_eq!(expected_count, actual_count);
-		}
-		Ok(())
-	}
-}
+// pub struct SplitCandidateStateToDecreasePoV<T>(PhantomData<T>);
+// impl<T: Config> OnRuntimeUpgrade for SplitCandidateStateToDecreasePoV<T> {
+// 	fn on_runtime_upgrade() -> Weight {
+// 		let pallet_prefix: &[u8] = b"ParachainStaking";
+// 		let storage_item_prefix: &[u8] = b"CandidateState";
+// 		// Read all the data into memory.
+// 		// https://crates.parity.io/frame_support/storage/migration/fn.storage_key_iter.html
+// 		let stored_data: Vec<_> = storage_key_iter::<
+// 			T::AccountId,
+// 			CollatorCandidate<T::AccountId, BalanceOf<T>>,
+// 			Twox64Concat,
+// 		>(pallet_prefix, storage_item_prefix)
+// 		.collect();
+// 		let migrated_count: Weight = stored_data
+// 			.len()
+// 			.try_into()
+// 			.expect("There are between 0 and 2**64 mappings stored.");
+// 		// Now remove the old storage
+// 		// https://crates.parity.io/frame_support/storage/migration/fn.remove_storage_prefix.html
+// 		remove_storage_prefix(pallet_prefix, storage_item_prefix, &[]);
+// 		// Assert that old storage is empty
+// 		assert!(storage_key_iter::<
+// 			T::AccountId,
+// 			CollatorCandidate<T::AccountId, BalanceOf<T>>,
+// 			Twox64Concat,
+// 		>(pallet_prefix, storage_item_prefix)
+// 		.next()
+// 		.is_none());
+// 		for (account, state) in stored_data {
+// 			// all delegations are stored greatest to least post migration
+// 			// but bottom delegations were least to greatest pre migration
+// 			let new_bottom_delegations: Vec<Bond<T::AccountId, BalanceOf<T>>> = if state
+// 				.bottom_delegations
+// 				.len() >
+// 				T::MaxBottomDelegationsPerCandidate::get() as usize
+// 			{
+// 				// if actual length > max bottom delegations, revoke the bottom actual - max
+// 				let rest = state.bottom_delegations.len() -
+// 					T::MaxBottomDelegationsPerCandidate::get() as usize;
+// 				let mut total_less = BalanceOf::<T>::zero();
+// 				state.bottom_delegations.iter().take(rest).for_each(|Bond { owner, amount }| {
+// 					total_less = total_less.saturating_add(*amount);
+// 					// update delegator state
+// 					// unreserve kicked bottom
+// 					T::Currency::unreserve(owner, *amount);
+// 					let mut delegator_state = <DelegatorState<T>>::get(&owner)
+// 						.expect("Delegation existence => DelegatorState existence");
+// 					let leaving = delegator_state.delegations.0.len() == 1usize;
+// 					delegator_state.rm_delegation(&account);
+// 					Pallet::<T>::deposit_event(Event::DelegationKicked {
+// 						delegator: owner.clone(),
+// 						candidate: account.clone(),
+// 						unstaked_amount: *amount,
+// 					});
+// 					if leaving {
+// 						<DelegatorState<T>>::remove(&owner);
+// 						Pallet::<T>::deposit_event(Event::DelegatorLeft {
+// 							delegator: owner.clone(),
+// 							unstaked_amount: *amount,
+// 						});
+// 					} else {
+// 						<DelegatorState<T>>::insert(&owner, delegator_state);
+// 					}
+// 				});
+// 				let new_total = <Total<T>>::get() - total_less;
+// 				<Total<T>>::put(new_total);
+// 				state
+// 					.bottom_delegations
+// 					.into_iter()
+// 					.rev()
+// 					.take(T::MaxBottomDelegationsPerCandidate::get() as usize)
+// 					.collect()
+// 			} else {
+// 				state.bottom_delegations.into_iter().rev().collect()
+// 			};
+// 			let lowest_top_delegation_amount = if state.top_delegations.is_empty() {
+// 				BalanceOf::<T>::zero()
+// 			} else {
+// 				state.top_delegations[state.top_delegations.len() - 1].amount
+// 			};
+// 			let highest_bottom_delegation_amount = if new_bottom_delegations.is_empty() {
+// 				BalanceOf::<T>::zero()
+// 			} else {
+// 				new_bottom_delegations[0].amount
+// 			};
+// 			// start here,
+// 			let lowest_bottom_delegation_amount = if new_bottom_delegations.is_empty() {
+// 				BalanceOf::<T>::zero()
+// 			} else {
+// 				new_bottom_delegations[new_bottom_delegations.len() - 1].amount
+// 			};
+// 			let top_capacity = match &state.top_delegations {
+// 				x if x.len() as u32 >= T::MaxTopDelegationsPerCandidate::get() =>
+// 					CapacityStatus::Full,
+// 				x if x.is_empty() => CapacityStatus::Empty,
+// 				_ => CapacityStatus::Partial,
+// 			};
+// 			let bottom_capacity = match &new_bottom_delegations {
+// 				x if x.len() as u32 >= T::MaxBottomDelegationsPerCandidate::get() =>
+// 					CapacityStatus::Full,
+// 				x if x.is_empty() => CapacityStatus::Empty,
+// 				_ => CapacityStatus::Partial,
+// 			};
+// 			let metadata = CandidateMetadata {
+// 				bond: state.bond,
+// 				delegation_count: state.top_delegations.len() as u32 +
+// 					new_bottom_delegations.len() as u32,
+// 				total_counted: state.total_counted,
+// 				lowest_top_delegation_amount,
+// 				highest_bottom_delegation_amount,
+// 				lowest_bottom_delegation_amount,
+// 				top_capacity,
+// 				bottom_capacity,
+// 				request: state.request,
+// 				status: state.state,
+// 			};
+// 			<CandidateInfo<T>>::insert(&account, metadata);
+// 			let top_delegations = Delegations {
+// 				total: state.total_counted - state.bond,
+// 				delegations: state.top_delegations,
+// 			};
+// 			<TopDelegations<T>>::insert(&account, top_delegations);
+// 			let bottom_delegations = Delegations {
+// 				total: new_bottom_delegations
+// 					.iter()
+// 					.fold(BalanceOf::<T>::zero(), |acc, b| acc + b.amount),
+// 				delegations: new_bottom_delegations,
+// 			};
+// 			<BottomDelegations<T>>::insert(&account, bottom_delegations);
+// 		}
+// 		let weight = T::DbWeight::get();
+// 		migrated_count.saturating_mul(3 * weight.write + weight.read)
+// 	}
+// 	#[cfg(feature = "try-runtime")]
+// 	fn pre_upgrade() -> Result<(), &'static str> {
+// 		// get delegation count for all candidates to check consistency
+// 		for (account, state) in <CandidateState<T>>::iter() {
+// 			// insert top + bottom into some temp map?
+// 			let total_delegation_count =
+// 				state.top_delegations.len() as u32 + state.bottom_delegations.len() as u32;
+// 			Self::set_temp_storage(
+// 				total_delegation_count,
+// 				&format!("Candidate{:?}DelegationCount", account)[..],
+// 			);
+// 		}
+// 		Ok(())
+// 	}
+//
+// 	#[cfg(feature = "try-runtime")]
+// 	fn post_upgrade() -> Result<(), &'static str> {
+// 		// check that top + bottom are the same as the expected (stored in temp)
+// 		for (account, state) in <CandidateInfo<T>>::iter() {
+// 			let expected_count: u32 =
+// 				Self::get_temp_storage(&format!("Candidate{:?}DelegationCount", account)[..])
+// 					.expect("qed");
+// 			let actual_count = state.delegation_count;
+// 			assert_eq!(expected_count, actual_count);
+// 		}
+// 		Ok(())
+// 	}
+// }
 
 /// Migration to properly increase maximum delegations per collator
 /// The logic may be used to recompute the top and bottom delegations whenever

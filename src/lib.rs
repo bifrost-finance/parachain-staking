@@ -236,7 +236,7 @@ pub mod pallet {
 		}
 	}
 
-	#[derive(PartialEq, Clone, Copy, Encode, Decode, RuntimeDebug, TypeInfo)]
+	#[derive(PartialEq, Eq, Clone, Copy, Encode, Decode, RuntimeDebug, TypeInfo)]
 	/// Request scheduled to change the collator candidate self-bond
 	pub struct CandidateBondLessRequest<Balance> {
 		pub amount: Balance,
@@ -1162,7 +1162,7 @@ pub mod pallet {
 
 	/// Convey relevant information describing if a delegator was added to the top or bottom
 	/// Delegations added to the top yield a new total
-	#[derive(Clone, Copy, PartialEq, Encode, Decode, RuntimeDebug, TypeInfo)]
+	#[derive(Clone, Copy, PartialEq, Eq, Encode, Decode, RuntimeDebug, TypeInfo)]
 	pub enum DelegatorAdded<B> {
 		AddedToTop { new_total: B },
 		AddedToBottom,
@@ -1601,7 +1601,7 @@ pub mod pallet {
 		pub action: DelegationChange,
 	}
 
-	#[derive(Clone, Encode, PartialEq, Decode, RuntimeDebug, TypeInfo)]
+	#[derive(Clone, Encode, PartialEq, Eq, Decode, RuntimeDebug, TypeInfo)]
 	/// Pending requests to mutate delegations for each delegator
 	pub struct PendingDelegationRequests<AccountId, Balance> {
 		/// Number of pending revocations (necessary for determining whether revoke is exit)
@@ -2738,8 +2738,8 @@ pub mod pallet {
 				T::Currency::unreserve(&bond.owner, bond.amount);
 				// remove delegation from delegator state
 				let mut delegator = DelegatorState::<T>::get(&bond.owner).expect(
-					"Collator state and delegator state are consistent. 
-						Collator state has a record of this delegation. Therefore, 
+					"Collator state and delegator state are consistent.
+						Collator state has a record of this delegation. Therefore,
 						Delegator state also has a record. qed.",
 				);
 				if let Some(remaining) = delegator.rm_delegation(&candidate) {
@@ -3279,7 +3279,7 @@ pub mod pallet {
 					}
 				} else {
 					let pool_account: <T as frame_system::Config>::AccountId =
-						T::PalletId::get().into_account();
+						T::PalletId::get().into_account_truncating();
 					let result = T::Currency::transfer(
 						&pool_account,
 						&to,
