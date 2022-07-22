@@ -17,15 +17,16 @@
 #![cfg(feature = "runtime-benchmarks")]
 
 //! Benchmarking
-use frame_benchmarking::{account, benchmarks, impl_benchmark_test_suite};
+use frame_benchmarking::{account, benchmarks, impl_benchmark_test_suite, vec};
 use frame_support::traits::{Currency, Get, OnFinalize, OnInitialize, ReservableCurrency};
 use frame_system::RawOrigin;
+use nimbus_primitives::EventHandler;
 use sp_runtime::{Perbill, Percent};
 use sp_std::{collections::btree_map::BTreeMap, vec::Vec};
 
 use crate::{
-	BalanceOf, Call, CandidateBondLessRequest, Config, DelegationChange, DelegationRequest, Pallet,
-	Range,
+	BalanceOf, Call, CandidateBondLessRequest, Config, DelegationAction, Pallet, Range,
+	ScheduledRequest,
 };
 
 /// Minimum collator candidate stake
@@ -111,53 +112,7 @@ fn roll_to_and_author<T: Config>(round_delay: u32, author: T::AccountId) {
 const USER_SEED: u32 = 999666;
 
 benchmarks! {
-	// HOTFIX BENCHMARK
-	hotfix_remove_delegation_requests {
-		let x in 2..<<T as Config>::MaxTopDelegationsPerCandidate as Get<u32>>::get()
-		+ <<T as Config>::MaxBottomDelegationsPerCandidate as Get<u32>>::get();
-		let mut delegators: Vec<T::AccountId> = Vec::new();
-		let collator = create_funded_collator::<T>(
-			"candidate",
-			100,
-			0u32.into(),
-			true,
-			1u32
-		)?;
-		let mut col_del_count = 0u32;
-		for i in 1..x {
-			let seed = USER_SEED + i;
-			let delegator = create_funded_delegator::<T>(
-				"delegator",
-				seed,
-				0u32.into(),
-				collator.clone(),
-				true,
-				col_del_count,
-			)?;
-			delegators.push(delegator);
-			col_del_count += 1u32;
-		}
-	}: _(RawOrigin::Root, delegators)
-	verify { }
-
-	hotfix_update_candidate_pool_value {
-		let x in 5..200;
-		let mut candidates: Vec<T::AccountId> = Vec::new();
-		for i in 1..x {
-			let account = create_funded_collator::<T>(
-				"candidate",
-				i + 100,
-				0u32.into(),
-				true,
-				i
-			)?;
-			candidates.push(account);
-		}
-	}: _(RawOrigin::Root, candidates)
-	verify { }
-
 	// MONETARY ORIGIN DISPATCHABLES
-
 	set_staking_expectations {
 		let stake_range: Range<BalanceOf<T>> = Range {
 			min: 100u32.into(),
@@ -411,6 +366,14 @@ benchmarks! {
 		)?;
 	}: _(RawOrigin::Signed(caller.clone()), min_candidate_stk)
 	verify {
+		let state = Pallet::<T>::candidate_info(&caller).expect("request bonded less so exists");
+		assert_eq!(
+			state.request,
+			Some(CandidateBondLessRequest {
+				amount: min_candidate_stk,
+				when_executable: 3,
+			})
+		);
 	}
 
 	execute_candidate_bond_less {
@@ -538,7 +501,11 @@ benchmarks! {
 		)?;
 	}: _(RawOrigin::Signed(caller.clone()))
 	verify {
-		assert!(Pallet::<T>::delegator_state(&caller).unwrap().is_leaving());
+		assert!(
+			Pallet::<T>::delegation_scheduled_requests(&collator)
+				.iter()
+				.any(|r| r.delegator == caller && matches!(r.action, DelegationAction::Revoke(_)))
+		);
 	}
 
 	execute_leave_delegators {
@@ -630,6 +597,14 @@ benchmarks! {
 		)?;
 	}: _(RawOrigin::Signed(caller.clone()), collator.clone())
 	verify {
+		assert_eq!(
+			Pallet::<T>::delegation_scheduled_requests(&collator),
+			vec![ScheduledRequest {
+				delegator: caller,
+				when_executable: 3,
+				action: DelegationAction::Revoke(bond),
+			}],
+		);
 	}
 
 	delegator_bond_more {
@@ -674,6 +649,16 @@ benchmarks! {
 		let bond_less = <<T as Config>::MinDelegatorStk as Get<BalanceOf<T>>>::get();
 	}: _(RawOrigin::Signed(caller.clone()), collator.clone(), bond_less)
 	verify {
+		let state = Pallet::<T>::delegator_state(&caller)
+			.expect("just request bonded less so exists");
+		assert_eq!(
+			Pallet::<T>::delegation_scheduled_requests(&collator),
+			vec![ScheduledRequest {
+				delegator: caller,
+				when_executable: 3,
+				action: DelegationAction::Decrease(bond_less),
+			}],
+		);
 	}
 
 	execute_revoke_delegation {
@@ -772,7 +757,9 @@ benchmarks! {
 		)?;
 	} verify {
 		assert!(
-			Pallet::<T>::delegator_state(&caller).unwrap().requests().get(&collator).is_none()
+			!Pallet::<T>::delegation_scheduled_requests(&collator)
+			.iter()
+			.any(|x| &x.delegator == &caller)
 		);
 	}
 
@@ -806,11 +793,9 @@ benchmarks! {
 		)?;
 	} verify {
 		assert!(
-			Pallet::<T>::delegator_state(&caller)
-				.unwrap()
-				.requests()
-				.get(&collator)
-				.is_none()
+			!Pallet::<T>::delegation_scheduled_requests(&collator)
+				.iter()
+				.any(|x| &x.delegator == &caller)
 		);
 	}
 
@@ -1038,8 +1023,21 @@ benchmarks! {
 		// TODO: this is an extra read right here (we should whitelist it?)
 		let payout_info = Pallet::<T>::delayed_payouts(round_for_payout).expect("payout expected");
 		let result = Pallet::<T>::pay_one_collator_reward(round_for_payout, payout_info);
+		assert!(result.0.is_some()); // TODO: how to keep this in scope so it can be done in verify block?
 	}
 	verify {
+		// collator should have been paid
+		assert!(
+			T::Currency::free_balance(&sole_collator) > initial_stake_amount,
+			"collator should have been paid in pay_one_collator_reward"
+		);
+		// nominators should have been paid
+		for delegator in &delegators {
+			assert!(
+				T::Currency::free_balance(&delegator) > initial_stake_amount,
+				"delegator should have been paid in pay_one_collator_reward"
+			);
+		}
 	}
 
 	base_on_initialize {
