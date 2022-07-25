@@ -118,7 +118,7 @@ parameter_types! {
 	pub const MinCollatorStk: u128 = 10;
 	pub const MinDelegatorStk: u128 = 5;
 	pub const MinDelegation: u128 = 3;
-	pub AllowInflation: bool = true;
+	pub AllowInflation: bool = false;
 	pub PaymentInRound: u128 = 10;
 	pub const ParachainStakingPalletId: PalletId = PalletId(*b"bf/stake");
 	pub ToMigrateInvulnables: Vec<AccountId> = vec![
