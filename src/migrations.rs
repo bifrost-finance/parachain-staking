@@ -94,7 +94,7 @@ impl<T: Config> OnRuntimeUpgrade for InitGenesisMigration<T> {
 		// Set parachain bond config to default config
 		<ParachainBondInfo<T>>::put(ParachainBondConfig {
 			// must be set soon; if not => due inflation will be sent to collators/delegators
-			account: T::PalletId::get().into_account(),
+			account: T::PalletId::get().into_account_truncating(),
 			percent: T::DefaultParachainBondReservePercent::get(),
 			payment_in_round: T::PaymentInRound::get(),
 		});

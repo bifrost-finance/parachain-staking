@@ -2734,8 +2734,8 @@ pub mod pallet {
 				T::Currency::unreserve(&bond.owner, bond.amount);
 				// remove delegation from delegator state
 				let mut delegator = DelegatorState::<T>::get(&bond.owner).expect(
-					"Collator state and delegator state are consistent. 
-						Collator state has a record of this delegation. Therefore, 
+					"Collator state and delegator state are consistent.
+						Collator state has a record of this delegation. Therefore,
 						Delegator state also has a record. qed.",
 				);
 				if let Some(remaining) = delegator.rm_delegation(&candidate) {
@@ -3275,7 +3275,7 @@ pub mod pallet {
 					}
 				} else {
 					let pool_account: <T as frame_system::Config>::AccountId =
-						T::PalletId::get().into_account();
+						T::PalletId::get().into_account_truncating();
 					let result = T::Currency::transfer(
 						&pool_account,
 						&to,
