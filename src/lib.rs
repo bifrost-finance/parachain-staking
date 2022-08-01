@@ -78,16 +78,19 @@ pub mod pallet {
 	use frame_support::{
 		pallet_prelude::*,
 		traits::{
-			tokens::WithdrawReasons, Currency, Get, Imbalance, LockIdentifier, LockableCurrency,
-			ReservableCurrency,
+			tokens::WithdrawReasons, Currency, EstimateNextSessionRotation, ExistenceRequirement,
+			Get, Imbalance, LockIdentifier, LockableCurrency, ReservableCurrency,
 		},
+		PalletId,
 	};
 	use frame_system::pallet_prelude::*;
+	use pallet_session::ShouldEndSession;
 	use parity_scale_codec::Decode;
 	use sp_runtime::{
-		traits::{Saturating, Zero},
-		Perbill, Percent,
+		traits::{AccountIdConversion, Saturating, Zero},
+		Perbill, Percent, Permill,
 	};
+	use sp_staking::SessionIndex;
 	use sp_std::{collections::btree_map::BTreeMap, prelude::*};
 
 	use crate::{
@@ -184,6 +187,21 @@ pub mod pallet {
 		type OnNewRound: OnNewRound;
 		/// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
+		/// Allow inflation or not
+		#[pallet::constant]
+		type AllowInflation: Get<bool>;
+		/// Fix payment in one round if no inflation
+		#[pallet::constant]
+		type PaymentInRound: Get<BalanceOf<Self>>;
+		/// Invulnables to migrate
+		#[pallet::constant]
+		type ToMigrateInvulnables: Get<Vec<Self::AccountId>>;
+		/// Invulnables init stake
+		#[pallet::constant]
+		type InitSeedStk: Get<BalanceOf<Self>>;
+		/// PalletId
+		#[pallet::constant]
+		type PalletId: Get<PalletId>;
 	}
 
 	#[pallet::error]
@@ -446,18 +464,18 @@ pub mod pallet {
 	#[pallet::storage]
 	#[pallet::getter(fn collator_commission)]
 	/// Commission percent taken off of rewards for all collators
-	type CollatorCommission<T: Config> = StorageValue<_, Perbill, ValueQuery>;
+	pub(crate) type CollatorCommission<T: Config> = StorageValue<_, Perbill, ValueQuery>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn total_selected)]
 	/// The total candidates selected every round
-	type TotalSelected<T: Config> = StorageValue<_, u32, ValueQuery>;
+	pub(crate) type TotalSelected<T: Config> = StorageValue<_, u32, ValueQuery>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn parachain_bond_info)]
 	/// Parachain bond config info { account, percent_of_inflation }
-	type ParachainBondInfo<T: Config> =
-		StorageValue<_, ParachainBondConfig<T::AccountId>, ValueQuery>;
+	pub(crate) type ParachainBondInfo<T: Config> =
+		StorageValue<_, ParachainBondConfig<T::AccountId, BalanceOf<T>>, ValueQuery>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn round)]
@@ -666,6 +684,7 @@ pub mod pallet {
 				account: T::AccountId::decode(&mut sp_runtime::traits::TrailingZeroInput::zeroes())
 					.expect("infinite length input; no invalid inputs for type; qed"),
 				percent: T::DefaultParachainBondReservePercent::get(),
+				payment_in_round: T::PaymentInRound::get(),
 			});
 			// Set total selected candidates to minimum config
 			<TotalSelected<T>>::put(T::MinSelectedCandidates::get());
@@ -738,9 +757,14 @@ pub mod pallet {
 			new: T::AccountId,
 		) -> DispatchResultWithPostInfo {
 			T::MonetaryGovernanceOrigin::ensure_origin(origin)?;
-			let ParachainBondConfig { account: old, percent } = <ParachainBondInfo<T>>::get();
+			let ParachainBondConfig { account: old, percent, payment_in_round } =
+				<ParachainBondInfo<T>>::get();
 			ensure!(old != new, Error::<T>::NoWritingSameValue);
-			<ParachainBondInfo<T>>::put(ParachainBondConfig { account: new.clone(), percent });
+			<ParachainBondInfo<T>>::put(ParachainBondConfig {
+				account: new.clone(),
+				percent,
+				payment_in_round,
+			});
 			Self::deposit_event(Event::ParachainBondAccountSet { old, new });
 			Ok(().into())
 		}
@@ -751,9 +775,14 @@ pub mod pallet {
 			new: Percent,
 		) -> DispatchResultWithPostInfo {
 			T::MonetaryGovernanceOrigin::ensure_origin(origin)?;
-			let ParachainBondConfig { account, percent: old } = <ParachainBondInfo<T>>::get();
+			let ParachainBondConfig { account, percent: old, payment_in_round } =
+				<ParachainBondInfo<T>>::get();
 			ensure!(old != new, Error::<T>::NoWritingSameValue);
-			<ParachainBondInfo<T>>::put(ParachainBondConfig { account, percent: new });
+			<ParachainBondInfo<T>>::put(ParachainBondConfig {
+				account,
+				percent: new,
+				payment_in_round,
+			});
 			Self::deposit_event(Event::ParachainBondReservePercentSet { old, new });
 			Ok(().into())
 		}
@@ -1425,20 +1454,25 @@ pub mod pallet {
 				return
 			}
 			let total_staked = <Staked<T>>::take(round_to_payout);
-			let total_issuance = Self::compute_issuance(total_staked);
+			let total_issuance = match T::AllowInflation::get() {
+				true => Self::compute_issuance(total_staked),
+				false => T::PaymentInRound::get(),
+			};
 			let mut left_issuance = total_issuance;
-			// reserve portion of issuance for parachain bond account
-			let bond_config = <ParachainBondInfo<T>>::get();
-			let parachain_bond_reserve = bond_config.percent * total_issuance;
-			if let Ok(imb) =
-				T::Currency::deposit_into_existing(&bond_config.account, parachain_bond_reserve)
-			{
-				// update round issuance iff transfer succeeds
-				left_issuance = left_issuance.saturating_sub(imb.peek());
-				Self::deposit_event(Event::ReservedForParachainBond {
-					account: bond_config.account,
-					value: imb.peek(),
-				});
+			if T::AllowInflation::get() {
+				// reserve portion of issuance for parachain bond account
+				let bond_config = <ParachainBondInfo<T>>::get();
+				let parachain_bond_reserve = bond_config.percent * total_issuance;
+				if let Ok(imb) =
+					T::Currency::deposit_into_existing(&bond_config.account, parachain_bond_reserve)
+				{
+					// update round issuance iff transfer succeeds
+					left_issuance = left_issuance.saturating_sub(imb.peek());
+					Self::deposit_event(Event::ReservedForParachainBond {
+						account: bond_config.account,
+						value: imb.peek(),
+					});
+				}
 			}
 
 			let payout = DelayedPayout {
@@ -1500,11 +1534,28 @@ pub mod pallet {
 			}
 
 			let mint = |amt: BalanceOf<T>, to: T::AccountId| {
-				if let Ok(amount_transferred) = T::Currency::deposit_into_existing(&to, amt) {
-					Self::deposit_event(Event::Rewarded {
-						account: to.clone(),
-						rewards: amount_transferred.peek(),
-					});
+				if T::AllowInflation::get() {
+					if let Ok(amount_transferred) = T::Currency::deposit_into_existing(&to, amt) {
+						Self::deposit_event(Event::Rewarded {
+							account: to.clone(),
+							rewards: amount_transferred.peek(),
+						});
+					}
+				} else {
+					let pool_account: <T as frame_system::Config>::AccountId =
+						T::PalletId::get().into_account_truncating();
+					let result = T::Currency::transfer(
+						&pool_account,
+						&to,
+						amt,
+						ExistenceRequirement::KeepAlive,
+					);
+					match result {
+						Ok(_) => Self::deposit_event(Event::Rewarded { account: to, rewards: amt }),
+						Err(e) => {
+							log::error!("reward from pool account fail as {:?}", e);
+						},
+					}
 				}
 			};
 
@@ -1582,7 +1633,7 @@ pub mod pallet {
 		}
 		/// Best as in most cumulatively supported in terms of stake
 		/// Returns [collator_count, delegation_count, total staked]
-		fn select_top_candidates(now: RoundIndex) -> (u32, u32, BalanceOf<T>) {
+		pub fn select_top_candidates(now: RoundIndex) -> (u32, u32, BalanceOf<T>) {
 			let (mut collator_count, mut delegation_count, mut total) =
 				(0u32, 0u32, BalanceOf::<T>::zero());
 			// choose the top TotalSelected qualified candidates, ordered by stake
@@ -1730,28 +1781,106 @@ pub mod pallet {
 			}
 			Ok(())
 		}
+
+		/// Add reward points to block authors:
+		/// * 20 points to the block producer for producing a block in the chain
+		pub(crate) fn note_author(author: T::AccountId) {
+			let now = <Round<T>>::get().current;
+			let score_plus_20 = <AwardedPts<T>>::get(now, &author).saturating_add(20);
+			<AwardedPts<T>>::insert(now, author, score_plus_20);
+			<Points<T>>::mutate(now, |x| *x = x.saturating_add(20));
+		}
 	}
-
-	// /// Add reward points to block authors:
-	// /// * 20 points to the block producer for producing a block in the chain
-	// impl<T: Config> nimbus_primitives::EventHandler<T::AccountId> for Pallet<T> {
-	// 	fn note_author(author: T::AccountId) {
-	// 		let now = <Round<T>>::get().current;
-	// 		let score_plus_20 = <AwardedPts<T>>::get(now, &author).saturating_add(20);
-	// 		<AwardedPts<T>>::insert(now, author, score_plus_20);
-	// 		<Points<T>>::mutate(now, |x| *x = x.saturating_add(20));
-	// 	}
-	// }
-
-	// impl<T: Config> nimbus_primitives::CanAuthor<T::AccountId> for Pallet<T> {
-	// 	fn can_author(account: &T::AccountId, _slot: &u32) -> bool {
-	// 		Self::is_selected_candidate(account)
-	// 	}
-	// }
 
 	impl<T: Config> Get<Vec<T::AccountId>> for Pallet<T> {
 		fn get() -> Vec<T::AccountId> {
 			Self::selected_candidates()
+		}
+	}
+
+	impl<T> pallet_authorship::EventHandler<T::AccountId, T::BlockNumber> for Pallet<T>
+	where
+		T: Config + pallet_authorship::Config + pallet_session::Config,
+	{
+		/// Add reward points to block authors:
+		/// * 20 points to the block producer for producing a block in the chain
+		fn note_author(author: T::AccountId) {
+			Pallet::<T>::note_author(author);
+		}
+
+		fn note_uncle(_author: T::AccountId, _age: T::BlockNumber) {
+			// we too are not caring.
+		}
+	}
+
+	impl<T: Config> pallet_session::SessionManager<T::AccountId> for Pallet<T> {
+		/// 1. A new session starts.
+		/// 2. In hook new_session: Read the current top n candidates from the
+		///    TopCandidates and assign this set to author blocks for the next
+		///    session.
+		/// 3. AuRa queries the authorities from the session pallet for
+		///    this session and picks authors on round-robin-basis from list of
+		///    authorities.
+		fn new_session(new_index: SessionIndex) -> Option<Vec<T::AccountId>> {
+			log::debug!(
+				"assembling new collators for new session {} at #{:?}",
+				new_index,
+				<frame_system::Pallet<T>>::block_number(),
+			);
+
+			let collators = Pallet::<T>::selected_candidates().to_vec();
+			if collators.is_empty() {
+				// we never want to pass an empty set of collators. This would brick the chain.
+				log::error!("💥 keeping old session because of empty collator set!");
+				None
+			} else {
+				Some(collators)
+			}
+		}
+
+		fn end_session(_end_index: SessionIndex) {
+			// we too are not caring.
+		}
+
+		fn start_session(_start_index: SessionIndex) {
+			// we too are not caring.
+		}
+	}
+
+	impl<T: Config> ShouldEndSession<T::BlockNumber> for Pallet<T> {
+		fn should_end_session(now: T::BlockNumber) -> bool {
+			let round = <Round<T>>::get();
+			// always update when a new round should start
+			round.should_update(now)
+		}
+	}
+
+	impl<T: Config> EstimateNextSessionRotation<T::BlockNumber> for Pallet<T> {
+		fn average_session_length() -> T::BlockNumber {
+			T::BlockNumber::from(<Round<T>>::get().length)
+		}
+
+		fn estimate_current_session_progress(now: T::BlockNumber) -> (Option<Permill>, Weight) {
+			let round = <Round<T>>::get();
+			let passed_blocks = now.saturating_sub(round.first);
+
+			(
+				Some(Permill::from_rational(passed_blocks, T::BlockNumber::from(round.length))),
+				// One read for the round info, blocknumber is read free
+				T::DbWeight::get().reads(1),
+			)
+		}
+
+		fn estimate_next_session_rotation(
+			_now: T::BlockNumber,
+		) -> (Option<T::BlockNumber>, Weight) {
+			let round = <Round<T>>::get();
+
+			(
+				Some(round.first + round.length.into()),
+				// One read for the round info, blocknumber is read free
+				T::DbWeight::get().reads(1),
+			)
 		}
 	}
 }

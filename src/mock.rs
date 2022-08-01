@@ -22,6 +22,7 @@ use frame_support::{
 		ReservableCurrency,
 	},
 	weights::Weight,
+	PalletId,
 };
 use sp_core::H256;
 use sp_runtime::{
@@ -122,6 +123,13 @@ parameter_types! {
 	pub const MinCollatorStk: u128 = 10;
 	pub const MinDelegatorStk: u128 = 5;
 	pub const MinDelegation: u128 = 3;
+	pub AllowInflation: bool = true;
+	pub PaymentInRound: u128 = 10;
+	pub const ParachainStakingPalletId: PalletId = PalletId(*b"bf/stake");
+	pub ToMigrateInvulnables: Vec<AccountId> = vec![
+		0,1
+	];
+	pub InitSeedStk: u128 = 10;
 }
 impl Config for Test {
 	type Event = Event;
@@ -148,6 +156,11 @@ impl Config for Test {
 	type OnCollatorPayout = ();
 	type OnNewRound = ();
 	type WeightInfo = ();
+	type AllowInflation = AllowInflation;
+	type PaymentInRound = PaymentInRound;
+	type PalletId = ParachainStakingPalletId;
+	type ToMigrateInvulnables = ToMigrateInvulnables;
+	type InitSeedStk = InitSeedStk;
 }
 
 pub(crate) struct ExtBuilder {

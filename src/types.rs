@@ -1550,18 +1550,21 @@ impl<
 
 #[derive(Clone, PartialEq, Eq, Encode, Decode, RuntimeDebug, TypeInfo)]
 /// Reserve information { account, percent_of_inflation }
-pub struct ParachainBondConfig<AccountId> {
+pub struct ParachainBondConfig<AccountId, BalanceOf> {
 	/// Account which receives funds intended for parachain bond
 	pub account: AccountId,
 	/// Percent of inflation set aside for parachain bond account
 	pub percent: Percent,
+	/// fixed payment if no inflation
+	pub payment_in_round: BalanceOf,
 }
-impl<A: Decode> Default for ParachainBondConfig<A> {
-	fn default() -> ParachainBondConfig<A> {
+impl<A: Decode, B: Zero> Default for ParachainBondConfig<A, B> {
+	fn default() -> ParachainBondConfig<A, B> {
 		ParachainBondConfig {
 			account: A::decode(&mut sp_runtime::traits::TrailingZeroInput::zeroes())
 				.expect("infinite length input; no invalid inputs for type; qed"),
 			percent: Percent::zero(),
+			payment_in_round: B::zero(),
 		}
 	}
 }
