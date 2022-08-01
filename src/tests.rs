@@ -873,7 +873,7 @@ fn execute_leave_candidates_removes_candidate_state() {
 			assert_eq!(candidate_state.bond, 10u128);
 			roll_to(10);
 			assert_ok!(ParachainStaking::execute_leave_candidates(Origin::signed(1), 1, 0));
-			assert!(ParachainStaking::candidate_state(1).is_none());
+			assert!(ParachainStaking::candidate_info(1).is_none());
 		});
 }
 
@@ -902,7 +902,7 @@ fn execute_leave_candidates_removes_pending_delegation_requests() {
 			assert_eq!(candidate_state.bond, 10u128);
 			roll_to(10);
 			assert_ok!(ParachainStaking::execute_leave_candidates(Origin::signed(1), 1, 1));
-			assert!(ParachainStaking::candidate_state(1).is_none());
+			assert!(ParachainStaking::candidate_info(1).is_none());
 			assert!(
 				!ParachainStaking::delegation_scheduled_requests(&1)
 					.iter()
