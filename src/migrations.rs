@@ -20,8 +20,24 @@
 
 #[cfg(feature = "try-runtime")]
 use frame_support::traits::OnRuntimeUpgradeHelpersExt;
-use frame_support::Twox64Concat;
-use sp_runtime::traits::AccountIdConversion;
+use frame_support::{
+	migration::storage_key_iter,
+	pallet_prelude::PhantomData,
+	traits::{Get, OnRuntimeUpgrade, ReservableCurrency},
+	weights::Weight,
+	Twox64Concat,
+};
+extern crate alloc;
+#[cfg(feature = "try-runtime")]
+use alloc::format;
+
+#[cfg(feature = "try-runtime")]
+use scale_info::prelude::string::String;
+use sp_runtime::{
+	traits::{AccountIdConversion, Saturating, Zero},
+	Perbill,
+};
+use sp_std::{convert::TryInto, vec::Vec};
 
 #[allow(deprecated)]
 use crate::types::deprecated::{DelegationChange, Delegator as OldDelegator};
@@ -30,28 +46,11 @@ use crate::{
 	inflation::{perbill_annual_to_perbill_round, InflationInfo, BLOCKS_PER_YEAR},
 	pallet::{DelegationScheduledRequests, DelegatorState, Total},
 	types::Delegator,
-	BalanceOf, Bond, BottomDelegations, CandidateInfo, CandidateMetadata, CapacityStatus,
-	CollatorCandidate, CollatorCommission, Config, Delegations, Event, InflationConfig, Pallet,
-	ParachainBondConfig, ParachainBondInfo, Points, Range, Round, RoundInfo, Staked,
-	TopDelegations, TotalSelected,
+	AccountIdOf, BalanceOf, Bond, BottomDelegations, CandidateInfo, CandidateMetadata,
+	CandidatePool, CapacityStatus, CollatorCandidate, CollatorCommission, Config, Delegations,
+	Event, InflationConfig, Pallet, ParachainBondConfig, ParachainBondInfo, Points, Range, Round,
+	RoundInfo, Staked, TopDelegations, TotalSelected,
 };
-extern crate alloc;
-#[cfg(feature = "try-runtime")]
-use alloc::format;
-
-use frame_support::{
-	migration::storage_key_iter,
-	pallet_prelude::PhantomData,
-	traits::{Get, OnRuntimeUpgrade, ReservableCurrency},
-	weights::Weight,
-};
-#[cfg(feature = "try-runtime")]
-use scale_info::prelude::string::String;
-use sp_runtime::{
-	traits::{Saturating, Zero},
-	Perbill,
-};
-use sp_std::{convert::TryInto, vec::Vec};
 
 /// Migration to purge staking storage bloat for `Points` and `AtStake` storage items
 pub struct InitGenesisMigration<T>(PhantomData<T>);
@@ -70,7 +69,7 @@ impl<T: Config> OnRuntimeUpgrade for InitGenesisMigration<T> {
 			ideal: Perbill::from_percent(5),
 			max: Perbill::from_percent(5),
 		};
-		let expected: BalanceOf<T> = BalanceOf::<T>::from(T::PaymentInRound::get());
+		let expected: BalanceOf<T> = T::PaymentInRound::get();
 
 		let inflation_info: InflationInfo<BalanceOf<T>> = InflationInfo {
 			// staking expectations
@@ -80,7 +79,7 @@ impl<T: Config> OnRuntimeUpgrade for InitGenesisMigration<T> {
 			round: to_round_inflation(annual),
 		};
 		<InflationConfig<T>>::put(inflation_info);
-		let endowment: BalanceOf<T> = BalanceOf::<T>::from(T::InitSeedStk::get());
+		let endowment: BalanceOf<T> = T::InitSeedStk::get();
 
 		let mut candidate_count = 0u32;
 
@@ -142,7 +141,6 @@ impl<T: Config> OnRuntimeUpgrade for InitGenesisMigration<T> {
 /// [DelegationScheduledRequests] storage item.
 /// Additionally [DelegatorState] is migrated from [OldDelegator] to [Delegator].
 pub struct SplitDelegatorStateIntoDelegationScheduledRequests<T>(PhantomData<T>);
-
 impl<T: Config> SplitDelegatorStateIntoDelegationScheduledRequests<T> {
 	const PALLET_PREFIX: &'static [u8] = b"ParachainStaking";
 	const DELEGATOR_STATE_PREFIX: &'static [u8] = b"DelegatorState";
@@ -150,8 +148,8 @@ impl<T: Config> SplitDelegatorStateIntoDelegationScheduledRequests<T> {
 	#[allow(deprecated)]
 	#[cfg(feature = "try-runtime")]
 	fn old_request_to_string(
-		delegator: &T::AccountId,
-		request: &crate::deprecated::DelegationRequest<T::AccountId, BalanceOf<T>>,
+		delegator: &AccountIdOf<T>,
+		request: &crate::deprecated::DelegationRequest<AccountIdOf<T>, BalanceOf<T>>,
 	) -> String {
 		match request.action {
 			DelegationChange::Revoke => {
@@ -170,7 +168,7 @@ impl<T: Config> SplitDelegatorStateIntoDelegationScheduledRequests<T> {
 	}
 
 	#[cfg(feature = "try-runtime")]
-	fn new_request_to_string(request: &ScheduledRequest<T::AccountId, BalanceOf<T>>) -> String {
+	fn new_request_to_string(request: &ScheduledRequest<AccountIdOf<T>, BalanceOf<T>>) -> String {
 		match request.action {
 			DelegationAction::Revoke(v) => {
 				format!(
@@ -203,11 +201,11 @@ impl<T: Config> OnRuntimeUpgrade for SplitDelegatorStateIntoDelegationScheduledR
 		let mut writes: Weight = 0;
 
 		let mut scheduled_requests: BTreeMap<
-			T::AccountId,
-			Vec<ScheduledRequest<T::AccountId, BalanceOf<T>>>,
+			AccountIdOf<T>,
+			Vec<ScheduledRequest<AccountIdOf<T>, BalanceOf<T>>>,
 		> = BTreeMap::new();
 		<DelegatorState<T>>::translate(
-			|delegator, old_state: OldDelegator<T::AccountId, BalanceOf<T>>| {
+			|delegator, old_state: OldDelegator<AccountIdOf<T>, BalanceOf<T>>| {
 				reads = reads.saturating_add(1);
 				writes = writes.saturating_add(1);
 
@@ -248,10 +246,15 @@ impl<T: Config> OnRuntimeUpgrade for SplitDelegatorStateIntoDelegationScheduledR
 	fn pre_upgrade() -> Result<(), &'static str> {
 		let mut expected_delegator_state_entries = 0u64;
 		let mut expected_requests = 0u64;
-		for (_key, state) in migration::storage_iter::<OldDelegator<T::AccountId, BalanceOf<T>>>(
+		for (_key, state) in migration::storage_iter::<OldDelegator<AccountIdOf<T>, BalanceOf<T>>>(
 			Self::PALLET_PREFIX,
 			Self::DELEGATOR_STATE_PREFIX,
 		) {
+			log::info!(
+				target: "SplitDelegatorStateIntoDelegationScheduledRequests",
+				"delegator: {:?}, less total: {:?}. fmt: {:?}",
+				state.id, state.requests.less_total, &*format!("expected_delegator-{:?}_decrease_amount", state.id,),
+			);
 			Self::set_temp_storage(
 				state.requests.less_total,
 				&*format!("expected_delegator-{:?}_decrease_amount", state.id),
@@ -259,7 +262,7 @@ impl<T: Config> OnRuntimeUpgrade for SplitDelegatorStateIntoDelegationScheduledR
 
 			for (collator, request) in state.requests.requests.iter() {
 				Self::set_temp_storage(
-					Self::old_request_to_string(&state.id, &request),
+					Self::old_request_to_string(&state.id, request),
 					&*format!("expected_collator-{:?}_delegator-{:?}_request", collator, state.id,),
 				);
 			}
@@ -349,8 +352,8 @@ impl<T: Config> OnRuntimeUpgrade for PatchIncorrectDelegationSums<T> {
 		// Read all the data into memory.
 		// https://crates.parity.io/frame_support/storage/migration/fn.storage_key_iter.html
 		let stored_top_delegations: Vec<_> = storage_key_iter::<
-			T::AccountId,
-			Delegations<T::AccountId, BalanceOf<T>>,
+			AccountIdOf<T>,
+			Delegations<AccountIdOf<T>, BalanceOf<T>>,
 			Twox64Concat,
 		>(pallet_prefix, top_delegations_prefix)
 		.collect();
@@ -359,8 +362,8 @@ impl<T: Config> OnRuntimeUpgrade for PatchIncorrectDelegationSums<T> {
 			.try_into()
 			.expect("There are between 0 and 2**64 mappings stored.");
 		let stored_bottom_delegations: Vec<_> = storage_key_iter::<
-			T::AccountId,
-			Delegations<T::AccountId, BalanceOf<T>>,
+			AccountIdOf<T>,
+			Delegations<AccountIdOf<T>, BalanceOf<T>>,
 			Twox64Concat,
 		>(pallet_prefix, bottom_delegations_prefix)
 		.collect();
@@ -369,8 +372,8 @@ impl<T: Config> OnRuntimeUpgrade for PatchIncorrectDelegationSums<T> {
 			.try_into()
 			.expect("There are between 0 and 2**64 mappings stored.");
 		fn fix_delegations<T: Config>(
-			delegations: Delegations<T::AccountId, BalanceOf<T>>,
-		) -> Delegations<T::AccountId, BalanceOf<T>> {
+			delegations: Delegations<AccountIdOf<T>, BalanceOf<T>>,
+		) -> Delegations<AccountIdOf<T>, BalanceOf<T>> {
 			let correct_total = delegations
 				.delegations
 				.iter()
@@ -453,8 +456,8 @@ impl<T: Config> OnRuntimeUpgrade for PatchIncorrectDelegationSums<T> {
 // Read all the data into memory.
 // https://crates.parity.io/frame_support/storage/migration/fn.storage_key_iter.html
 // let stored_data: Vec<_> = storage_key_iter::<
-// T::AccountId,
-// CollatorCandidate<T::AccountId, BalanceOf<T>>,
+// AccountIdOf<T>,
+// CollatorCandidate<AccountIdOf<T>, BalanceOf<T>>,
 // Twox64Concat,
 // >(pallet_prefix, storage_item_prefix)
 // .collect();
@@ -467,8 +470,8 @@ impl<T: Config> OnRuntimeUpgrade for PatchIncorrectDelegationSums<T> {
 // remove_storage_prefix(pallet_prefix, storage_item_prefix, &[]);
 // Assert that old storage is empty
 // assert!(storage_key_iter::<
-// T::AccountId,
-// CollatorCandidate<T::AccountId, BalanceOf<T>>,
+// AccountIdOf<T>,
+// CollatorCandidate<AccountIdOf<T>, BalanceOf<T>>,
 // Twox64Concat,
 // >(pallet_prefix, storage_item_prefix)
 // .next()
@@ -476,7 +479,7 @@ impl<T: Config> OnRuntimeUpgrade for PatchIncorrectDelegationSums<T> {
 // for (account, state) in stored_data {
 // all delegations are stored greatest to least post migration
 // but bottom delegations were least to greatest pre migration
-// let new_bottom_delegations: Vec<Bond<T::AccountId, BalanceOf<T>>> =
+// let new_bottom_delegations: Vec<Bond<AccountIdOf<T>, BalanceOf<T>>> =
 // if state.bottom_delegations.len()
 // > T::MaxBottomDelegationsPerCandidate::get() as usize
 // {
@@ -618,8 +621,8 @@ impl<T: Config> OnRuntimeUpgrade for PatchIncorrectDelegationSums<T> {
 // 		log::info!(target: "RemoveExitQueue", "running migration to remove staking exit queue");
 // 		let exit_queue = <ExitQueue2<T>>::take();
 // 		let (mut reads, mut writes) = (1u64, 0u64);
-// 		let mut delegator_exits: BTreeMap<T::AccountId, RoundIndex> = BTreeMap::new();
-// 		let mut delegation_revocations: BTreeMap<T::AccountId, (T::AccountId, RoundIndex)> =
+// 		let mut delegator_exits: BTreeMap<AccountIdOf<T>, RoundIndex> = BTreeMap::new();
+// 		let mut delegation_revocations: BTreeMap<AccountIdOf<T>, (AccountIdOf<T>, RoundIndex)> =
 // 			BTreeMap::new();
 // 		// Track scheduled delegator exits and revocations before migrating state
 // 		// Candidates already track exit info locally so no tracking is necessary
@@ -632,7 +635,7 @@ impl<T: Config> OnRuntimeUpgrade for PatchIncorrectDelegationSums<T> {
 // 		}
 // 		// execute candidate migration
 // 		for (candidate_id, collator_state) in <CollatorState2<T>>::drain() {
-// 			let candidate_state: CollatorCandidate<T::AccountId, BalanceOf<T>> =
+// 			let candidate_state: CollatorCandidate<AccountIdOf<T>, BalanceOf<T>> =
 // 				collator_state.into();
 // 			<CandidateState<T>>::insert(candidate_id, candidate_state);
 // 			reads += 1u64;
@@ -677,7 +680,7 @@ impl<T: Config> OnRuntimeUpgrade for PatchIncorrectDelegationSums<T> {
 // 		assert!(DelegatorState::<T>::iter().next().is_none());
 
 // 		// Check number of old collator candidates, and set it aside in temp storage
-// 		let old_collator_count = storage_iter::<Collator2<T::AccountId, BalanceOf<T>>>(
+// 		let old_collator_count = storage_iter::<Collator2<AccountIdOf<T>, BalanceOf<T>>>(
 // 			pallet_prefix,
 // 			collator_state_prefix,
 // 		)
@@ -687,8 +690,8 @@ impl<T: Config> OnRuntimeUpgrade for PatchIncorrectDelegationSums<T> {
 // 		// Read first old candidate from old storage and set it aside in temp storage
 // 		if old_collator_count > 0 {
 // 			let example_collator = storage_key_iter::<
-// 				T::AccountId,
-// 				Collator2<T::AccountId, BalanceOf<T>>,
+// 				AccountIdOf<T>,
+// 				Collator2<AccountIdOf<T>, BalanceOf<T>>,
 // 				Twox64Concat,
 // 			>(pallet_prefix, collator_state_prefix)
 // 			.next()
@@ -698,7 +701,7 @@ impl<T: Config> OnRuntimeUpgrade for PatchIncorrectDelegationSums<T> {
 // 		}
 
 // 		// Check number of new delegators, and set it aside in temp storage
-// 		let old_nominator_count = storage_iter::<Nominator2<T::AccountId, BalanceOf<T>>>(
+// 		let old_nominator_count = storage_iter::<Nominator2<AccountIdOf<T>, BalanceOf<T>>>(
 // 			pallet_prefix,
 // 			nominator_state_prefix,
 // 		)
@@ -708,8 +711,8 @@ impl<T: Config> OnRuntimeUpgrade for PatchIncorrectDelegationSums<T> {
 // 		// Read first new delegator from old storage and set it aside in temp storage
 // 		if old_nominator_count > 0 {
 // 			let example_nominator = storage_key_iter::<
-// 				T::AccountId,
-// 				Nominator2<T::AccountId, BalanceOf<T>>,
+// 				AccountIdOf<T>,
+// 				Nominator2<AccountIdOf<T>, BalanceOf<T>>,
 // 				Twox64Concat,
 // 			>(pallet_prefix, nominator_state_prefix)
 // 			.next()
@@ -731,11 +734,11 @@ impl<T: Config> OnRuntimeUpgrade for PatchIncorrectDelegationSums<T> {
 // 		// Check that our example candidate is converted correctly
 // 		if new_candidate_count > 0 {
 // 			let (account, original_collator_state): (
-// 				T::AccountId,
-// 				Collator2<T::AccountId, BalanceOf<T>>,
+// 				AccountIdOf<T>,
+// 				Collator2<AccountIdOf<T>, BalanceOf<T>>,
 // 			) = Self::get_temp_storage("example_collator").expect("qed");
 // 			let new_candidate_state = CandidateState::<T>::get(account).expect("qed");
-// 			let old_candidate_converted: CollatorCandidate<T::AccountId, BalanceOf<T>> =
+// 			let old_candidate_converted: CollatorCandidate<AccountIdOf<T>, BalanceOf<T>> =
 // 				original_collator_state.into();
 // 			assert_eq!(new_candidate_state, old_candidate_converted);
 // 		}
@@ -749,11 +752,11 @@ impl<T: Config> OnRuntimeUpgrade for PatchIncorrectDelegationSums<T> {
 // 		// Check that our example delegator is converted correctly
 // 		if new_delegator_count > 0 {
 // 			let (account, original_delegator_state): (
-// 				T::AccountId,
-// 				Nominator2<T::AccountId, BalanceOf<T>>,
+// 				AccountIdOf<T>,
+// 				Nominator2<AccountIdOf<T>, BalanceOf<T>>,
 // 			) = Self::get_temp_storage("example_nominator").expect("qed");
 // 			let new_delegator_state = DelegatorState::<T>::get(&account).expect("qed");
-// 			let old_delegator_converted: Delegator<T::AccountId, BalanceOf<T>> =
+// 			let old_delegator_converted: Delegator<AccountIdOf<T>, BalanceOf<T>> =
 // 				migrate_nominator_to_delegator_state::<T>(account, original_delegator_state);
 // 			assert_eq!(old_delegator_converted, new_delegator_state);
 // 		}

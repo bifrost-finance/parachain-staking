@@ -28,8 +28,9 @@ use sp_runtime::{
 use sp_std::{cmp::Ordering, collections::btree_map::BTreeMap, prelude::*};
 
 use crate::{
-	set::OrderedSet, BalanceOf, BottomDelegations, CandidateInfo, Config, DelegatorState, Error,
-	Event, Pallet, Round, RoundIndex, TopDelegations, Total, COLLATOR_LOCK_ID, DELEGATOR_LOCK_ID,
+	set::OrderedSet, AccountIdOf, BalanceOf, BottomDelegations, CandidateInfo, Config,
+	DelegatorState, Error, Event, Pallet, Round, RoundIndex, TopDelegations, Total,
+	COLLATOR_LOCK_ID, DELEGATOR_LOCK_ID,
 };
 
 #[derive(Clone, Encode, Decode, RuntimeDebug, TypeInfo)]
@@ -377,7 +378,7 @@ impl<
 	pub fn go_online(&mut self) {
 		self.status = CollatorStatus::Active;
 	}
-	pub fn bond_more<T: Config>(&mut self, who: T::AccountId, more: Balance) -> DispatchResult
+	pub fn bond_more<T: Config>(&mut self, who: AccountIdOf<T>, more: Balance) -> DispatchResult
 	where
 		BalanceOf<T>: From<Balance>,
 	{
@@ -421,7 +422,7 @@ impl<
 	}
 	/// Execute pending request to decrease the collator self bond
 	/// Returns the event to be emitted
-	pub fn execute_bond_less<T: Config>(&mut self, who: T::AccountId) -> DispatchResult
+	pub fn execute_bond_less<T: Config>(&mut self, who: AccountIdOf<T>) -> DispatchResult
 	where
 		BalanceOf<T>: From<Balance>,
 	{
@@ -453,7 +454,7 @@ impl<
 		Ok(())
 	}
 	/// Cancel candidate bond less request
-	pub fn cancel_bond_less<T: Config>(&mut self, who: T::AccountId) -> DispatchResult
+	pub fn cancel_bond_less<T: Config>(&mut self, who: AccountIdOf<T>) -> DispatchResult
 	where
 		BalanceOf<T>: From<Balance>,
 	{
@@ -470,8 +471,8 @@ impl<
 	/// Reset top delegations metadata
 	pub fn reset_top_data<T: Config>(
 		&mut self,
-		candidate: T::AccountId,
-		top_delegations: &Delegations<T::AccountId, BalanceOf<T>>,
+		candidate: AccountIdOf<T>,
+		top_delegations: &Delegations<AccountIdOf<T>, BalanceOf<T>>,
 	) where
 		BalanceOf<T>: Into<Balance> + From<Balance>,
 	{
@@ -489,7 +490,7 @@ impl<
 	/// Reset bottom delegations metadata
 	pub fn reset_bottom_data<T: Config>(
 		&mut self,
-		bottom_delegations: &Delegations<T::AccountId, BalanceOf<T>>,
+		bottom_delegations: &Delegations<AccountIdOf<T>, BalanceOf<T>>,
 	) where
 		BalanceOf<T>: Into<Balance>,
 	{
@@ -504,8 +505,8 @@ impl<
 	/// MUST ensure no delegation exists for this candidate in the `DelegatorState` before call
 	pub fn add_delegation<T: Config>(
 		&mut self,
-		candidate: &T::AccountId,
-		delegation: Bond<T::AccountId, BalanceOf<T>>,
+		candidate: &AccountIdOf<T>,
+		delegation: Bond<AccountIdOf<T>, BalanceOf<T>>,
 	) -> Result<(DelegatorAdded<Balance>, Option<Balance>), DispatchError>
 	where
 		BalanceOf<T>: Into<Balance> + From<Balance>,
@@ -547,8 +548,8 @@ impl<
 	/// Only call if lowest top delegation is less than delegation.amount || !top_full
 	pub fn add_top_delegation<T: Config>(
 		&mut self,
-		candidate: &T::AccountId,
-		delegation: Bond<T::AccountId, BalanceOf<T>>,
+		candidate: &AccountIdOf<T>,
+		delegation: Bond<AccountIdOf<T>, BalanceOf<T>>,
 	) -> Option<Balance>
 	where
 		BalanceOf<T>: Into<Balance> + From<Balance>,
@@ -585,8 +586,8 @@ impl<
 	pub fn add_bottom_delegation<T: Config>(
 		&mut self,
 		bumped_from_top: bool,
-		candidate: &T::AccountId,
-		delegation: Bond<T::AccountId, BalanceOf<T>>,
+		candidate: &AccountIdOf<T>,
+		delegation: Bond<AccountIdOf<T>, BalanceOf<T>>,
 	) where
 		BalanceOf<T>: Into<Balance> + From<Balance>,
 	{
@@ -651,8 +652,8 @@ impl<
 	/// Return Ok(if_total_counted_changed)
 	pub fn rm_delegation_if_exists<T: Config>(
 		&mut self,
-		candidate: &T::AccountId,
-		delegator: T::AccountId,
+		candidate: &AccountIdOf<T>,
+		delegator: AccountIdOf<T>,
 		amount: Balance,
 	) -> Result<bool, DispatchError>
 	where
@@ -680,8 +681,8 @@ impl<
 	/// Remove top delegation, bumps top bottom delegation if exists
 	pub fn rm_top_delegation<T: Config>(
 		&mut self,
-		candidate: &T::AccountId,
-		delegator: T::AccountId,
+		candidate: &AccountIdOf<T>,
+		delegator: AccountIdOf<T>,
 	) -> Result<bool, DispatchError>
 	where
 		BalanceOf<T>: Into<Balance> + From<Balance>,
@@ -730,8 +731,8 @@ impl<
 	/// Returns if_total_counted_changed: bool
 	pub fn rm_bottom_delegation<T: Config>(
 		&mut self,
-		candidate: &T::AccountId,
-		delegator: T::AccountId,
+		candidate: &AccountIdOf<T>,
+		delegator: AccountIdOf<T>,
 	) -> Result<bool, DispatchError>
 	where
 		BalanceOf<T>: Into<Balance>,
@@ -764,8 +765,8 @@ impl<
 	/// Increase delegation amount
 	pub fn increase_delegation<T: Config>(
 		&mut self,
-		candidate: &T::AccountId,
-		delegator: T::AccountId,
+		candidate: &AccountIdOf<T>,
+		delegator: AccountIdOf<T>,
 		bond: BalanceOf<T>,
 		more: BalanceOf<T>,
 	) -> Result<bool, DispatchError>
@@ -795,8 +796,8 @@ impl<
 	/// Increase top delegation
 	pub fn increase_top_delegation<T: Config>(
 		&mut self,
-		candidate: &T::AccountId,
-		delegator: T::AccountId,
+		candidate: &AccountIdOf<T>,
+		delegator: AccountIdOf<T>,
 		more: BalanceOf<T>,
 	) -> Result<bool, DispatchError>
 	where
@@ -829,8 +830,8 @@ impl<
 	/// Increase bottom delegation
 	pub fn increase_bottom_delegation<T: Config>(
 		&mut self,
-		candidate: &T::AccountId,
-		delegator: T::AccountId,
+		candidate: &AccountIdOf<T>,
+		delegator: AccountIdOf<T>,
 		bond: BalanceOf<T>,
 		more: BalanceOf<T>,
 	) -> Result<bool, DispatchError>
@@ -839,7 +840,7 @@ impl<
 	{
 		let mut bottom_delegations =
 			<BottomDelegations<T>>::get(candidate).ok_or(Error::<T>::CandidateDNE)?;
-		let mut delegation_option: Option<Bond<T::AccountId, BalanceOf<T>>> = None;
+		let mut delegation_option: Option<Bond<AccountIdOf<T>, BalanceOf<T>>> = None;
 		let in_top_after = if (bond.saturating_add(more)).into() > self.lowest_top_delegation_amount
 		{
 			// bump it from bottom
@@ -908,8 +909,8 @@ impl<
 	/// Decrease delegation
 	pub fn decrease_delegation<T: Config>(
 		&mut self,
-		candidate: &T::AccountId,
-		delegator: T::AccountId,
+		candidate: &AccountIdOf<T>,
+		delegator: AccountIdOf<T>,
 		bond: Balance,
 		less: BalanceOf<T>,
 	) -> Result<bool, DispatchError>
@@ -940,8 +941,8 @@ impl<
 	/// Decrease top delegation
 	pub fn decrease_top_delegation<T: Config>(
 		&mut self,
-		candidate: &T::AccountId,
-		delegator: T::AccountId,
+		candidate: &AccountIdOf<T>,
+		delegator: AccountIdOf<T>,
 		bond: BalanceOf<T>,
 		less: BalanceOf<T>,
 	) -> Result<bool, DispatchError>
@@ -958,7 +959,7 @@ impl<
 		let mut top_delegations =
 			<TopDelegations<T>>::get(candidate).ok_or(Error::<T>::CandidateDNE)?;
 		let in_top_after = if bond_after_less_than_highest_bottom && full_top_and_nonempty_bottom {
-			let mut delegation_option: Option<Bond<T::AccountId, BalanceOf<T>>> = None;
+			let mut delegation_option: Option<Bond<AccountIdOf<T>, BalanceOf<T>>> = None;
 			// take delegation from top
 			top_delegations.delegations = top_delegations
 				.delegations
@@ -1019,8 +1020,8 @@ impl<
 	/// Decrease bottom delegation
 	pub fn decrease_bottom_delegation<T: Config>(
 		&mut self,
-		candidate: &T::AccountId,
-		delegator: T::AccountId,
+		candidate: &AccountIdOf<T>,
+		delegator: AccountIdOf<T>,
 		less: BalanceOf<T>,
 	) -> Result<bool, DispatchError>
 	where
@@ -1204,7 +1205,7 @@ impl<
 	pub fn total_add_if<T, F>(&mut self, amount: Balance, check: F) -> DispatchResult
 	where
 		T: Config,
-		T::AccountId: From<AccountId>,
+		AccountIdOf<T>: From<AccountId>,
 		BalanceOf<T>: From<Balance>,
 		F: Fn(Balance) -> DispatchResult,
 	{
@@ -1217,7 +1218,7 @@ impl<
 	pub fn total_sub_if<T, F>(&mut self, amount: Balance, check: F) -> DispatchResult
 	where
 		T: Config,
-		T::AccountId: From<AccountId>,
+		AccountIdOf<T>: From<AccountId>,
 		BalanceOf<T>: From<Balance>,
 		F: Fn(Balance) -> DispatchResult,
 	{
@@ -1231,7 +1232,7 @@ impl<
 	pub fn total_add<T, F>(&mut self, amount: Balance) -> DispatchResult
 	where
 		T: Config,
-		T::AccountId: From<AccountId>,
+		AccountIdOf<T>: From<AccountId>,
 		BalanceOf<T>: From<Balance>,
 	{
 		self.total = self.total.saturating_add(amount);
@@ -1242,7 +1243,7 @@ impl<
 	pub fn total_sub<T>(&mut self, amount: Balance) -> DispatchResult
 	where
 		T: Config,
-		T::AccountId: From<AccountId>,
+		AccountIdOf<T>: From<AccountId>,
 		BalanceOf<T>: From<Balance>,
 	{
 		self.total = self.total.saturating_sub(amount);
@@ -1268,7 +1269,7 @@ impl<
 	pub fn rm_delegation<T: Config>(&mut self, collator: &AccountId) -> Option<Balance>
 	where
 		BalanceOf<T>: From<Balance>,
-		T::AccountId: From<AccountId>,
+		AccountIdOf<T>: From<AccountId>,
 	{
 		let mut amt: Option<Balance> = None;
 		let delegations = self
@@ -1300,11 +1301,11 @@ impl<
 	) -> DispatchResult
 	where
 		BalanceOf<T>: From<Balance>,
-		T::AccountId: From<AccountId>,
-		Delegator<T::AccountId, BalanceOf<T>>: From<Delegator<AccountId, Balance>>,
+		AccountIdOf<T>: From<AccountId>,
+		Delegator<AccountIdOf<T>, BalanceOf<T>>: From<Delegator<AccountId, Balance>>,
 	{
-		let delegator_id: T::AccountId = self.id.clone().into();
-		let candidate_id: T::AccountId = candidate.clone().into();
+		let delegator_id: AccountIdOf<T> = self.id.clone().into();
+		let candidate_id: AccountIdOf<T> = candidate.clone().into();
 		let balance_amt: BalanceOf<T> = amount.into();
 		// increase delegation
 		for x in &mut self.delegations.0 {
@@ -1332,7 +1333,7 @@ impl<
 				<CandidateInfo<T>>::insert(&candidate_id, collator_state);
 				let new_total_staked = <Total<T>>::get().saturating_add(balance_amt);
 				<Total<T>>::put(new_total_staked);
-				let nom_st: Delegator<T::AccountId, BalanceOf<T>> = self.clone().into();
+				let nom_st: Delegator<AccountIdOf<T>, BalanceOf<T>> = self.clone().into();
 				<DelegatorState<T>>::insert(&delegator_id, nom_st);
 				Pallet::<T>::deposit_event(Event::DelegationIncreased {
 					delegator: delegator_id,
@@ -1360,7 +1361,7 @@ impl<
 	) -> DispatchResult
 	where
 		BalanceOf<T>: From<Balance>,
-		T::AccountId: From<AccountId>,
+		AccountIdOf<T>: From<AccountId>,
 	{
 		match additional_required_balance {
 			BondAdjust::Increase(amount) => {
@@ -1500,9 +1501,9 @@ pub struct Nominator2<AccountId, Balance> {
 
 // /// Temporary function to migrate state
 // pub(crate) fn migrate_nominator_to_delegator_state<T: Config>(
-// 	id: T::AccountId,
-// 	nominator: Nominator2<T::AccountId, BalanceOf<T>>,
-// ) -> Delegator<T::AccountId, BalanceOf<T>> {
+// 	id: AccountIdOf<T>,
+// 	nominator: Nominator2<AccountIdOf<T>, BalanceOf<T>>,
+// ) -> Delegator<AccountIdOf<T>, BalanceOf<T>> {
 // 	Delegator {
 // 		id,
 // 		delegations: nominator.delegations,

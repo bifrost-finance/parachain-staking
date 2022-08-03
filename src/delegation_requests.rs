@@ -24,8 +24,8 @@ use sp_std::{vec, vec::Vec};
 
 use crate::{
 	pallet::{
-		BalanceOf, CandidateInfo, Config, DelegationScheduledRequests, DelegatorState, Error,
-		Event, Pallet, Round, RoundIndex, Total,
+		AccountIdOf, BalanceOf, CandidateInfo, Config, DelegationScheduledRequests, DelegatorState,
+		Error, Event, Pallet, Round, RoundIndex, Total,
 	},
 	Delegator, DelegatorStatus,
 };
@@ -75,8 +75,8 @@ impl<A, B> From<ScheduledRequest<A, B>> for CancelledScheduledRequest<B> {
 impl<T: Config> Pallet<T> {
 	/// Schedules a [DelegationAction::Revoke] for the delegator, towards a given collator.
 	pub(crate) fn delegation_schedule_revoke(
-		collator: T::AccountId,
-		delegator: T::AccountId,
+		collator: AccountIdOf<T>,
+		delegator: AccountIdOf<T>,
 	) -> DispatchResultWithPostInfo {
 		let mut state = <DelegatorState<T>>::get(&delegator).ok_or(<Error<T>>::DelegatorDNE)?;
 		let mut scheduled_requests = <DelegationScheduledRequests<T>>::get(&collator);
@@ -109,8 +109,8 @@ impl<T: Config> Pallet<T> {
 
 	/// Schedules a [DelegationAction::Decrease] for the delegator, towards a given collator.
 	pub(crate) fn delegation_schedule_bond_decrease(
-		collator: T::AccountId,
-		delegator: T::AccountId,
+		collator: AccountIdOf<T>,
+		delegator: AccountIdOf<T>,
 		decrease_amount: BalanceOf<T>,
 	) -> DispatchResultWithPostInfo {
 		let mut state = <DelegatorState<T>>::get(&delegator).ok_or(<Error<T>>::DelegatorDNE)?;
@@ -154,8 +154,8 @@ impl<T: Config> Pallet<T> {
 
 	/// Cancels the delegator's existing [ScheduledRequest] towards a given collator.
 	pub(crate) fn delegation_cancel_request(
-		collator: T::AccountId,
-		delegator: T::AccountId,
+		collator: AccountIdOf<T>,
+		delegator: AccountIdOf<T>,
 	) -> DispatchResultWithPostInfo {
 		let mut state = <DelegatorState<T>>::get(&delegator).ok_or(<Error<T>>::DelegatorDNE)?;
 		let mut scheduled_requests = <DelegationScheduledRequests<T>>::get(&collator);
@@ -176,10 +176,10 @@ impl<T: Config> Pallet<T> {
 	}
 
 	fn cancel_request_with_state(
-		delegator: &T::AccountId,
-		state: &mut Delegator<T::AccountId, BalanceOf<T>>,
-		scheduled_requests: &mut Vec<ScheduledRequest<T::AccountId, BalanceOf<T>>>,
-	) -> Option<ScheduledRequest<T::AccountId, BalanceOf<T>>> {
+		delegator: &AccountIdOf<T>,
+		state: &mut Delegator<AccountIdOf<T>, BalanceOf<T>>,
+		scheduled_requests: &mut Vec<ScheduledRequest<AccountIdOf<T>, BalanceOf<T>>>,
+	) -> Option<ScheduledRequest<AccountIdOf<T>, BalanceOf<T>>> {
 		let request_idx = scheduled_requests.iter().position(|req| &req.delegator == delegator)?;
 
 		let request = scheduled_requests.remove(request_idx);
@@ -190,8 +190,8 @@ impl<T: Config> Pallet<T> {
 
 	/// Executes the delegator's existing [ScheduledRequest] towards a given collator.
 	pub(crate) fn delegation_execute_scheduled_request(
-		collator: T::AccountId,
-		delegator: T::AccountId,
+		collator: AccountIdOf<T>,
+		delegator: AccountIdOf<T>,
 	) -> DispatchResultWithPostInfo {
 		let mut state = <DelegatorState<T>>::get(&delegator).ok_or(<Error<T>>::DelegatorDNE)?;
 		let mut scheduled_requests = <DelegationScheduledRequests<T>>::get(&collator);
@@ -311,7 +311,7 @@ impl<T: Config> Pallet<T> {
 	/// Schedules [DelegationAction::Revoke] for the delegator, towards all delegated collator.
 	/// The last fulfilled request causes the delegator to leave the set of delegators.
 	pub(crate) fn delegator_schedule_revoke_all(
-		delegator: T::AccountId,
+		delegator: AccountIdOf<T>,
 	) -> DispatchResultWithPostInfo {
 		let mut state = <DelegatorState<T>>::get(&delegator).ok_or(<Error<T>>::DelegatorDNE)?;
 		let mut updated_scheduled_requests = vec![];
@@ -376,7 +376,7 @@ impl<T: Config> Pallet<T> {
 	/// Each delegation must have a [DelegationAction::Revoke] scheduled that must be allowed to be
 	/// executed in the current round, for this function to succeed.
 	pub(crate) fn delegator_cancel_scheduled_revoke_all(
-		delegator: T::AccountId,
+		delegator: AccountIdOf<T>,
 	) -> DispatchResultWithPostInfo {
 		let mut state = <DelegatorState<T>>::get(&delegator).ok_or(<Error<T>>::DelegatorDNE)?;
 		let mut updated_scheduled_requests = vec![];
@@ -426,7 +426,7 @@ impl<T: Config> Pallet<T> {
 	/// Each delegation must have a [DelegationAction::Revoke] scheduled that must be allowed to be
 	/// executed in the current round, for this function to succeed.
 	pub(crate) fn delegator_execute_scheduled_revoke_all(
-		delegator: T::AccountId,
+		delegator: AccountIdOf<T>,
 		delegation_count: u32,
 	) -> DispatchResultWithPostInfo {
 		let mut state = <DelegatorState<T>>::get(&delegator).ok_or(<Error<T>>::DelegatorDNE)?;
@@ -519,9 +519,9 @@ impl<T: Config> Pallet<T> {
 	/// Removes the delegator's existing [ScheduledRequest] towards a given collator, if exists.
 	/// The state needs to be persisted by the caller of this function.
 	pub(crate) fn delegation_remove_request_with_state(
-		collator: &T::AccountId,
-		delegator: &T::AccountId,
-		state: &mut Delegator<T::AccountId, BalanceOf<T>>,
+		collator: &AccountIdOf<T>,
+		delegator: &AccountIdOf<T>,
+		state: &mut Delegator<AccountIdOf<T>, BalanceOf<T>>,
 	) {
 		let mut scheduled_requests = <DelegationScheduledRequests<T>>::get(collator);
 
@@ -537,7 +537,10 @@ impl<T: Config> Pallet<T> {
 	}
 
 	/// Returns true if a [ScheduledRequest] exists for a given delegation
-	pub fn delegation_request_exists(collator: &T::AccountId, delegator: &T::AccountId) -> bool {
+	pub fn delegation_request_exists(
+		collator: &AccountIdOf<T>,
+		delegator: &AccountIdOf<T>,
+	) -> bool {
 		<DelegationScheduledRequests<T>>::get(collator)
 			.iter()
 			.any(|req| &req.delegator == delegator)
@@ -546,8 +549,8 @@ impl<T: Config> Pallet<T> {
 	/// Returns true if a [DelegationAction::Revoke] [ScheduledRequest] exists for a given
 	/// delegation
 	pub fn delegation_request_revoke_exists(
-		collator: &T::AccountId,
-		delegator: &T::AccountId,
+		collator: &AccountIdOf<T>,
+		delegator: &AccountIdOf<T>,
 	) -> bool {
 		<DelegationScheduledRequests<T>>::get(collator).iter().any(|req| {
 			&req.delegator == delegator && matches!(req.action, DelegationAction::Revoke(_))
