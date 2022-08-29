@@ -81,7 +81,7 @@ pub mod pallet {
 		pallet_prelude::*,
 		traits::{
 			tokens::WithdrawReasons, Currency, EstimateNextSessionRotation, ExistenceRequirement,
-			Get, Imbalance, LockIdentifier, LockableCurrency, OnRuntimeUpgrade, ReservableCurrency,
+			Get, Imbalance, LockIdentifier, LockableCurrency, ReservableCurrency,
 		},
 		PalletId,
 	};
@@ -98,7 +98,6 @@ pub mod pallet {
 	pub use super::AccountIdOf;
 	use crate::{
 		delegation_requests::{CancelledScheduledRequest, DelegationAction, ScheduledRequest},
-		migrations::SplitDelegatorStateIntoDelegationScheduledRequests,
 		set::OrderedSet,
 		traits::*,
 		types::*,
@@ -463,20 +462,6 @@ pub mod pallet {
 
 			weight
 		}
-
-		fn on_runtime_upgrade() -> Weight {
-			SplitDelegatorStateIntoDelegationScheduledRequests::<T>::on_runtime_upgrade()
-		}
-
-		// #[cfg(feature = "try-runtime")]
-		// fn pre_upgrade() -> Result<(), &'static str> {
-		// 	SplitDelegatorStateIntoDelegationScheduledRequests::<T>::pre_upgrade()
-		// }
-
-		// #[cfg(feature = "try-runtime")]
-		// fn post_upgrade() -> Result<(), &'static str> {
-		// 	SplitDelegatorStateIntoDelegationScheduledRequests::<T>::post_upgrade()
-		// }
 	}
 
 	#[pallet::storage]
